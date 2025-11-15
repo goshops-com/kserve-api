@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  buildkitd:
+    image: moby/buildkit:latest
+    container_name: buildkitd
+    privileged: true
+    ports:
+      - "1234:1234"
+    command: --addr tcp://0.0.0.0:1234
+    volumes:
+      # Using DigitalOcean block storage volume (100GB)
+      - /mnt/volume_nyc3_01/buildkit-cache:/var/lib/buildkit
+      # Registry credentials
+      - /root/buildkit-config:/root/.docker:ro
+    restart: unless-stopped
+    networks:
+      - buildkit-network
+
+networks:
+  buildkit-network:
+    driver: bridge

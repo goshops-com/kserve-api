@@ -1,0 +1,92 @@
+---
+# Standard Deployment (alternative to Knative Service)
+# Use this if you prefer a regular always-on deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kserve-api
+  namespace: default
+  labels:
+    app: kserve-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: kserve-api
+  template:
+    metadata:
+      labels:
+        app: kserve-api
+    spec:
+      serviceAccountName: kserve-api
+      imagePullSecrets:
+        - name: regcred
+      containers:
+        - name: api
+          image: registry.digitalocean.com/calvin-apps/kserve-api:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+              name: http
+              protocol: TCP
+          env:
+            - name: DEFAULT_NAMESPACE
+              value: "default"
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kserve-api
+  namespace: default
+  labels:
+    app: kserve-api
+spec:
+  type: ClusterIP
+  selector:
+    app: kserve-api
+  ports:
+    - port: 80
+      targetPort: 8080
+      protocol: TCP
+      name: http
+---
+# Optional: Ingress for external access
+# Uncomment if you want to expose via Kourier/Ingress
+# apiVersion: networking.k8s.io/v1
+# kind: Ingress
+# metadata:
+#   name: kserve-api
+#   namespace: default
+#   annotations:
+#     kubernetes.io/ingress.class: "kourier"
+# spec:
+#   rules:
+#     - host: api.default.calvinruntime.net
+#       http:
+#         paths:
+#           - path: /
+#             pathType: Prefix
+#             backend:
+#               service:
+#                 name: kserve-api
+#                 port:
+#                   number: 80

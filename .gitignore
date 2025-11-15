@@ -1,0 +1,36 @@
+# Claude Code editor config
+.claude/
+.claude.json
+.claude.json.backup
+
+# System and cache files
+.cache/
+.local/
+.ssh/
+.docker/
+snap/
+.nvm/
+.wget-hsts
+.bash_history
+.cloud-locale-test.skip
+
+# Binaries
+kubectl
+get-docker.sh
+
+# Build artifacts
+test-build/
+
+# Config directories
+.config/
+.kube/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
