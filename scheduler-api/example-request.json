@@ -1,0 +1,39 @@
+{
+  "triggers": [
+    {
+      "cron": "0 */2 * * *",
+      "url": "https://httpbin.org/post",
+      "method": "POST",
+      "payload": {
+        "event": "scheduled_task",
+        "workspace_id": "workspace-123",
+        "timestamp": "2025-11-16T00:00:00Z"
+      },
+      "headers": {
+        "Content-Type": "application/json",
+        "X-Custom-Header": "example-value"
+      }
+    },
+    {
+      "cron": "*/15 * * * *",
+      "url": "https://httpbin.org/get",
+      "method": "GET",
+      "headers": {
+        "X-API-Key": "your-api-key-here"
+      }
+    },
+    {
+      "cron": "0 9 * * 1-5",
+      "url": "https://api.example.com/daily-report",
+      "method": "POST",
+      "payload": {
+        "type": "daily_summary",
+        "format": "pdf"
+      },
+      "headers": {
+        "Authorization": "Bearer YOUR_TOKEN",
+        "Content-Type": "application/json"
+      }
+    }
+  ]
+}

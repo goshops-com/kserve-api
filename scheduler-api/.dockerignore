@@ -1,0 +1,13 @@
+node_modules
+npm-debug.log
+.env
+.git
+.gitignore
+README.md
+.vscode
+.idea
+*.swp
+*.swo
+.DS_Store
+example-request.json
+k8s/
