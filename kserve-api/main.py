@@ -56,6 +56,10 @@ def create_knative_service_spec(name: str, image: str, envs: Dict[str, str]) -> 
     # Convert envs dict to list of env vars
     env_list = [{"name": k, "value": v} for k, v in envs.items()]
 
+    # Auto-inject service URL for self-ping keep-alive pattern
+    service_url = f"https://{name}.{DOMAIN}"
+    env_list.append({"name": "SERVICE_URL", "value": service_url})
+
     return {
         "apiVersion": f"{KNATIVE_GROUP}/{KNATIVE_VERSION}",
         "kind": "Service",
