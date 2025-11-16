@@ -1,0 +1,10 @@
+apiVersion: serving.knative.dev/v1beta1
+kind: DomainMapping
+metadata:
+  name: scheduler-api.calvinruntime.net
+  namespace: default
+spec:
+  ref:
+    name: scheduler-api
+    kind: Service
+    apiVersion: v1

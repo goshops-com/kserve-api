@@ -1,0 +1,105 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scheduler-api
+  namespace: default
+  labels:
+    app: scheduler-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: scheduler-api
+  template:
+    metadata:
+      labels:
+        app: scheduler-api
+    spec:
+      imagePullSecrets:
+        - name: registry-secret
+      containers:
+        - name: scheduler-api
+          image: registry.digitalocean.com/calvin-apps/scheduler-api:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3000
+              protocol: TCP
+          env:
+            - name: NODE_ENV
+              value: "production"
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: scheduler-secrets
+                  key: REDIS_URL
+            - name: S3_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: scheduler-secrets
+                  key: S3_ENDPOINT
+            - name: S3_REGION
+              valueFrom:
+                secretKeyRef:
+                  name: scheduler-secrets
+                  key: S3_REGION
+            - name: S3_BUCKET
+              valueFrom:
+                secretKeyRef:
+                  name: scheduler-secrets
+                  key: S3_BUCKET
+            - name: S3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: scheduler-secrets
+                  key: S3_ACCESS_KEY
+            - name: S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: scheduler-secrets
+                  key: S3_SECRET_KEY
+            - name: METRICS_BUFFER_SIZE
+              valueFrom:
+                secretKeyRef:
+                  name: scheduler-secrets
+                  key: METRICS_BUFFER_SIZE
+            - name: METRICS_FLUSH_INTERVAL
+              valueFrom:
+                secretKeyRef:
+                  name: scheduler-secrets
+                  key: METRICS_FLUSH_INTERVAL
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "200m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: scheduler-api
+  namespace: default
+  labels:
+    app: scheduler-api
+spec:
+  type: ClusterIP
+  selector:
+    app: scheduler-api
+  ports:
+    - port: 80
+      targetPort: 3000
+      protocol: TCP
+      name: http
