@@ -10,29 +10,25 @@ kind: ClusterRole
 metadata:
   name: kserve-api-role
 rules:
-  # Permissions for InferenceServices
-  - apiGroups: ["serving.kserve.io"]
-    resources: ["inferenceservices"]
+  # Permissions for Knative Services
+  - apiGroups: ["serving.knative.dev"]
+    resources: ["services"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: ["serving.kserve.io"]
-    resources: ["inferenceservices/status"]
+  - apiGroups: ["serving.knative.dev"]
+    resources: ["services/status"]
     verbs: ["get", "list", "watch"]
-  # Permissions for ServingRuntimes
-  - apiGroups: ["serving.kserve.io"]
-    resources: ["servingruntimes", "clusterservingruntimes"]
-    verbs: ["get", "list", "watch"]
-  # Permissions to read namespaces (for validation)
-  - apiGroups: [""]
-    resources: ["namespaces"]
-    verbs: ["get", "list"]
   # Permissions for DomainMappings
   - apiGroups: ["serving.knative.dev"]
     resources: ["domainmappings"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # Permissions for PodAutoscalers (to fix min-scale)
-  - apiGroups: ["autoscaling.internal.knative.dev"]
-    resources: ["podautoscalers"]
-    verbs: ["get", "list", "watch", "patch"]
+  # Permissions to read namespaces (for validation)
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list"]
+  # Permissions to read pods and logs
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

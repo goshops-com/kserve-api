@@ -10,7 +10,7 @@ import os
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="KServe Model Management API")
+app = FastAPI(title="CalvinCode Deployment API")
 
 # Load Kubernetes config (in-cluster or local)
 try:
@@ -26,12 +26,11 @@ custom_api = client.CustomObjectsApi(api_client)
 core_v1 = client.CoreV1Api(api_client)
 
 # Constants
-KSERVE_GROUP = "serving.kserve.io"
-KSERVE_VERSION = "v1beta1"
-KSERVE_PLURAL = "inferenceservices"
 KNATIVE_GROUP = "serving.knative.dev"
-KNATIVE_VERSION = "v1beta1"
+KNATIVE_VERSION = "v1"
+KNATIVE_SERVICE_PLURAL = "services"
 DOMAIN_MAPPING_PLURAL = "domainmappings"
+DOMAIN_MAPPING_VERSION = "v1beta1"
 DEFAULT_NAMESPACE = os.getenv("DEFAULT_NAMESPACE", "default")
 DOMAIN = os.getenv("DOMAIN", "calvinruntime.net")
 
@@ -49,49 +48,54 @@ class DeploymentResponse(BaseModel):
     action: str  # "created" or "updated"
     status: str
     url: Optional[str] = None
-    predictor_url: Optional[str] = None
 
 
-def create_inference_service_spec(name: str, image: str, envs: Dict[str, str]) -> dict:
-    """Create InferenceService spec"""
+def create_knative_service_spec(name: str, image: str, envs: Dict[str, str]) -> dict:
+    """Create Knative Service spec for customer app deployment"""
 
     # Convert envs dict to list of env vars
     env_list = [{"name": k, "value": v} for k, v in envs.items()]
 
     return {
-        "apiVersion": f"{KSERVE_GROUP}/{KSERVE_VERSION}",
-        "kind": "InferenceService",
+        "apiVersion": f"{KNATIVE_GROUP}/{KNATIVE_VERSION}",
+        "kind": "Service",
         "metadata": {
             "name": name,
-            "annotations": {
-                "serving.kserve.io/enable-prometheus-scraping": "true",
-                "autoscaling.knative.dev/initial-scale": "0",  # Start with 0 pods
-                "autoscaling.knative.dev/min-scale": "0",  # Enable scale-to-zero
-                "autoscaling.knative.dev/max-scale": "10"  # Max 10 pods
+            "labels": {
+                "app": name,
+                "managed-by": "calvincode"
             }
         },
         "spec": {
-            "predictor": {
-                "containers": [{
-                    "name": "kserve-container",
-                    "image": image,
-                    "imagePullPolicy": "Always",
-                    "env": env_list,
-                    "ports": [{
-                        "containerPort": 8080,
-                        "protocol": "TCP"
-                    }],
-                    "resources": {
-                        "requests": {
-                            "cpu": "100m",
-                            "memory": "128Mi"
-                        },
-                        "limits": {
-                            "cpu": "1",
-                            "memory": "512Mi"
-                        }
+            "template": {
+                "metadata": {
+                    "annotations": {
+                        "autoscaling.knative.dev/min-scale": "0",
+                        "autoscaling.knative.dev/max-scale": "10",
+                        "autoscaling.knative.dev/target": "100"
                     }
-                }]
+                },
+                "spec": {
+                    "containers": [{
+                        "image": image,
+                        "imagePullPolicy": "Always",
+                        "env": env_list,
+                        "ports": [{
+                            "containerPort": 8080,
+                            "protocol": "TCP"
+                        }],
+                        "resources": {
+                            "requests": {
+                                "cpu": "100m",
+                                "memory": "128Mi"
+                            },
+                            "limits": {
+                                "cpu": "1",
+                                "memory": "512Mi"
+                            }
+                        }
+                    }]
+                }
             }
         }
     }
@@ -100,7 +104,7 @@ def create_inference_service_spec(name: str, image: str, envs: Dict[str, str]) -
 def create_domain_mapping_spec(domain_name: str, service_name: str, namespace: str) -> dict:
     """Create DomainMapping spec for clean URL"""
     return {
-        "apiVersion": f"{KNATIVE_GROUP}/{KNATIVE_VERSION}",
+        "apiVersion": f"{KNATIVE_GROUP}/{DOMAIN_MAPPING_VERSION}",
         "kind": "DomainMapping",
         "metadata": {
             "name": domain_name,
@@ -110,20 +114,20 @@ def create_domain_mapping_spec(domain_name: str, service_name: str, namespace: s
             "ref": {
                 "name": service_name,
                 "kind": "Service",
-                "apiVersion": f"{KNATIVE_GROUP}/v1"
+                "apiVersion": f"{KNATIVE_GROUP}/{KNATIVE_VERSION}"
             }
         }
     }
 
 
-def get_inference_service(name: str, namespace: str):
-    """Get InferenceService if it exists"""
+def get_knative_service(name: str, namespace: str):
+    """Get Knative Service if it exists"""
     try:
         return custom_api.get_namespaced_custom_object(
-            group=KSERVE_GROUP,
-            version=KSERVE_VERSION,
+            group=KNATIVE_GROUP,
+            version=KNATIVE_VERSION,
             namespace=namespace,
-            plural=KSERVE_PLURAL,
+            plural=KNATIVE_SERVICE_PLURAL,
             name=name
         )
     except ApiException as e:
@@ -137,7 +141,7 @@ def get_domain_mapping(domain_name: str, namespace: str):
     try:
         return custom_api.get_namespaced_custom_object(
             group=KNATIVE_GROUP,
-            version=KNATIVE_VERSION,
+            version=DOMAIN_MAPPING_VERSION,
             namespace=namespace,
             plural=DOMAIN_MAPPING_PLURAL,
             name=domain_name
@@ -152,7 +156,7 @@ def create_or_update_domain_mapping(name: str, namespace: str):
     """Create or update DomainMapping for clean URL"""
     try:
         domain_name = f"{name}.{DOMAIN}"
-        service_name = f"{name}-predictor"  # KServe creates this
+        service_name = name  # Direct Knative Service name (no -predictor suffix)
 
         existing = get_domain_mapping(domain_name, namespace)
         mapping_spec = create_domain_mapping_spec(domain_name, service_name, namespace)
@@ -161,7 +165,7 @@ def create_or_update_domain_mapping(name: str, namespace: str):
             logger.info(f"Creating DomainMapping: {domain_name} -> {service_name}")
             custom_api.create_namespaced_custom_object(
                 group=KNATIVE_GROUP,
-                version=KNATIVE_VERSION,
+                version=DOMAIN_MAPPING_VERSION,
                 namespace=namespace,
                 plural=DOMAIN_MAPPING_PLURAL,
                 body=mapping_spec
@@ -186,7 +190,7 @@ def delete_domain_mapping(name: str, namespace: str):
             logger.info(f"Deleting DomainMapping: {domain_name}")
             custom_api.delete_namespaced_custom_object(
                 group=KNATIVE_GROUP,
-                version=KNATIVE_VERSION,
+                version=DOMAIN_MAPPING_VERSION,
                 namespace=namespace,
                 plural=DOMAIN_MAPPING_PLURAL,
                 name=domain_name
@@ -200,14 +204,15 @@ def delete_domain_mapping(name: str, namespace: str):
 @app.get("/")
 async def root():
     return {
-        "service": "KServe Model Management API",
-        "version": "1.0.0",
+        "service": "CalvinCode Deployment API",
+        "version": "2.0.0",
+        "platform": "Knative Serving",
         "endpoints": {
             "health": "/health",
             "deploy": "/deploy (POST)",
-            "list": "/models (GET)",
-            "get": "/models/{namespace}/{name} (GET)",
-            "delete": "/models/{namespace}/{name} (DELETE)",
+            "list": "/apps (GET)",
+            "get": "/apps/{namespace}/{name} (GET)",
+            "delete": "/apps/{namespace}/{name} (DELETE)",
             "logs": "/logs/{name} (GET)"
         }
     }
@@ -218,52 +223,12 @@ async def health():
     return {"status": "healthy"}
 
 
-def fix_podautoscaler_scale(name: str, namespace: str):
-    """Fix PodAutoscaler min-scale annotation (KServe hardcodes it to 1)"""
-    try:
-        import time
-        # Wait for PodAutoscaler to be created
-        max_attempts = 30
-        for attempt in range(max_attempts):
-            try:
-                # Get the latest revision name
-                isvc = get_inference_service(name, namespace)
-                if isvc and isvc.get("status", {}).get("components", {}).get("predictor", {}).get("latestCreatedRevision"):
-                    revision_name = isvc["status"]["components"]["predictor"]["latestCreatedRevision"]
-
-                    # Try to patch the PodAutoscaler
-                    custom_api.patch_namespaced_custom_object(
-                        group="autoscaling.internal.knative.dev",
-                        version="v1alpha1",
-                        namespace=namespace,
-                        plural="podautoscalers",
-                        name=revision_name,
-                        body={
-                            "metadata": {
-                                "annotations": {
-                                    "autoscaling.knative.dev/min-scale": "0"
-                                }
-                            }
-                        }
-                    )
-                    logger.info(f"Fixed PodAutoscaler min-scale for {revision_name}")
-                    return
-            except ApiException as e:
-                if e.status != 404:
-                    logger.warning(f"Attempt {attempt + 1}: Error patching PodAutoscaler: {e.reason}")
-            time.sleep(1)
-
-        logger.warning(f"Failed to fix PodAutoscaler after {max_attempts} attempts")
-    except Exception as e:
-        logger.error(f"Unexpected error fixing PodAutoscaler: {str(e)}")
-
-
 @app.post("/deploy", response_model=DeploymentResponse)
-async def deploy_model(request: DeploymentRequest):
+async def deploy_app(request: DeploymentRequest):
     """
-    Deploy or update a model in KServe.
-    If the model doesn't exist, it will be created.
-    If it exists, it will be updated (triggering a restart).
+    Deploy or update an app using Knative Serving.
+    If the app doesn't exist, it will be created.
+    If it exists, it will be updated (triggering a new revision).
     Automatically creates a DomainMapping for clean URLs.
     """
     try:
@@ -272,57 +237,52 @@ async def deploy_model(request: DeploymentRequest):
 
         logger.info(f"Processing deployment request for {name} in namespace {namespace}")
 
-        # Check if InferenceService exists
-        existing = get_inference_service(name, namespace)
+        # Check if Knative Service exists
+        existing = get_knative_service(name, namespace)
 
         # Create the spec
-        inference_service = create_inference_service_spec(
+        knative_service = create_knative_service_spec(
             name=name,
             image=request.image,
             envs=request.envs
         )
 
         if existing is None:
-            # Create new InferenceService
-            logger.info(f"Creating new InferenceService: {name}")
+            # Create new Knative Service
+            logger.info(f"Creating new Knative Service: {name}")
             result = custom_api.create_namespaced_custom_object(
-                group=KSERVE_GROUP,
-                version=KSERVE_VERSION,
+                group=KNATIVE_GROUP,
+                version=KNATIVE_VERSION,
                 namespace=namespace,
-                plural=KSERVE_PLURAL,
-                body=inference_service
+                plural=KNATIVE_SERVICE_PLURAL,
+                body=knative_service
             )
             action = "created"
         else:
-            # Update existing InferenceService
-            logger.info(f"Updating existing InferenceService: {name}")
+            # Update existing Knative Service
+            logger.info(f"Updating existing Knative Service: {name}")
             result = custom_api.patch_namespaced_custom_object(
-                group=KSERVE_GROUP,
-                version=KSERVE_VERSION,
+                group=KNATIVE_GROUP,
+                version=KNATIVE_VERSION,
                 namespace=namespace,
-                plural=KSERVE_PLURAL,
+                plural=KNATIVE_SERVICE_PLURAL,
                 name=name,
-                body=inference_service
+                body=knative_service
             )
             action = "updated"
 
         # Create DomainMapping for clean URL
         create_or_update_domain_mapping(name, namespace)
 
-        # Fix PodAutoscaler min-scale (KServe hardcodes it to 1)
-        fix_podautoscaler_scale(name, namespace)
-
-        # Construct URLs
+        # Construct URL
         clean_url = f"https://{name}.{DOMAIN}"
-        predictor_url = f"https://{name}-predictor.{DOMAIN}"
 
         return DeploymentResponse(
             name=name,
             namespace=namespace,
             action=action,
             status="success",
-            url=clean_url,
-            predictor_url=predictor_url
+            url=clean_url
         )
 
     except ApiException as e:
@@ -333,49 +293,60 @@ async def deploy_model(request: DeploymentRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/models")
-async def list_models(namespace: str = DEFAULT_NAMESPACE):
-    """List all InferenceServices in a namespace"""
+@app.get("/apps")
+async def list_apps(namespace: str = DEFAULT_NAMESPACE):
+    """List all Knative Services (apps) in a namespace"""
     try:
         result = custom_api.list_namespaced_custom_object(
-            group=KSERVE_GROUP,
-            version=KSERVE_VERSION,
+            group=KNATIVE_GROUP,
+            version=KNATIVE_VERSION,
             namespace=namespace,
-            plural=KSERVE_PLURAL
+            plural=KNATIVE_SERVICE_PLURAL
         )
 
-        models = []
+        apps = []
         for item in result.get("items", []):
             name = item["metadata"]["name"]
-            models.append({
+
+            # Skip infrastructure services
+            if name in ["kserve-api", "scheduler-api"]:
+                continue
+
+            # Check if service is ready
+            conditions = item.get("status", {}).get("conditions", [])
+            ready = any(c.get("type") == "Ready" and c.get("status") == "True" for c in conditions)
+
+            apps.append({
                 "name": name,
                 "namespace": item["metadata"]["namespace"],
                 "url": f"https://{name}.{DOMAIN}",
-                "predictor_url": f"https://{name}-predictor.{DOMAIN}",
-                "ready": item.get("status", {}).get("conditions", [{}])[-1].get("status") == "True"
+                "ready": ready,
+                "image": item.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [{}])[0].get("image", "unknown")
             })
 
-        return {"models": models, "count": len(models)}
+        return {"apps": apps, "count": len(apps)}
 
     except ApiException as e:
         raise HTTPException(status_code=e.status, detail=str(e.reason))
 
 
-@app.get("/models/{namespace}/{name}")
-async def get_model(namespace: str, name: str):
-    """Get details of a specific InferenceService"""
+@app.get("/apps/{namespace}/{name}")
+async def get_app(namespace: str, name: str):
+    """Get details of a specific Knative Service (app)"""
     try:
-        result = get_inference_service(name, namespace)
+        result = get_knative_service(name, namespace)
 
         if result is None:
-            raise HTTPException(status_code=404, detail=f"Model {name} not found in namespace {namespace}")
+            raise HTTPException(status_code=404, detail=f"App {name} not found in namespace {namespace}")
+
+        containers = result.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
+        image = containers[0].get("image", "unknown") if containers else "unknown"
 
         return {
             "name": result["metadata"]["name"],
             "namespace": result["metadata"]["namespace"],
-            "image": result["spec"]["predictor"]["containers"][0]["image"],
+            "image": image,
             "url": f"https://{name}.{DOMAIN}",
-            "predictor_url": f"https://{name}-predictor.{DOMAIN}",
             "conditions": result.get("status", {}).get("conditions", [])
         }
 
@@ -383,24 +354,24 @@ async def get_model(namespace: str, name: str):
         raise HTTPException(status_code=e.status, detail=str(e.reason))
 
 
-@app.delete("/models/{namespace}/{name}")
-async def delete_model(namespace: str, name: str):
-    """Delete an InferenceService and its DomainMapping"""
+@app.delete("/apps/{namespace}/{name}")
+async def delete_app(namespace: str, name: str):
+    """Delete a Knative Service (app) and its DomainMapping"""
     try:
-        existing = get_inference_service(name, namespace)
+        existing = get_knative_service(name, namespace)
 
         if existing is None:
-            raise HTTPException(status_code=404, detail=f"Model {name} not found in namespace {namespace}")
+            raise HTTPException(status_code=404, detail=f"App {name} not found in namespace {namespace}")
 
         # Delete DomainMapping first
         delete_domain_mapping(name, namespace)
 
-        # Delete InferenceService
+        # Delete Knative Service
         custom_api.delete_namespaced_custom_object(
-            group=KSERVE_GROUP,
-            version=KSERVE_VERSION,
+            group=KNATIVE_GROUP,
+            version=KNATIVE_VERSION,
             namespace=namespace,
-            plural=KSERVE_PLURAL,
+            plural=KNATIVE_SERVICE_PLURAL,
             name=name
         )
 
@@ -417,18 +388,18 @@ async def delete_model(namespace: str, name: str):
 @app.get("/logs/{name}")
 async def get_logs(name: str, namespace: str = DEFAULT_NAMESPACE, tail_lines: int = 100):
     """
-    Get the latest logs for an app/model.
-    Returns the latest 100 lines (or specified tail_lines) from the predictor pod.
+    Get the latest logs for an app.
+    Returns the latest 100 lines (or specified tail_lines) from the app pod.
     """
     try:
-        # Check if InferenceService exists
-        existing = get_inference_service(name, namespace)
+        # Check if Knative Service exists
+        existing = get_knative_service(name, namespace)
         if existing is None:
-            raise HTTPException(status_code=404, detail=f"Model {name} not found in namespace {namespace}")
+            raise HTTPException(status_code=404, detail=f"App {name} not found in namespace {namespace}")
 
-        # Find pods for this InferenceService
-        # KServe creates pods with labels: serving.kserve.io/inferenceservice={name}
-        label_selector = f"serving.kserve.io/inferenceservice={name}"
+        # Find pods for this Knative Service
+        # Knative creates pods with labels: serving.knative.dev/service={name}
+        label_selector = f"serving.knative.dev/service={name}"
 
         pods = core_v1.list_namespaced_pod(
             namespace=namespace,
@@ -440,7 +411,7 @@ async def get_logs(name: str, namespace: str = DEFAULT_NAMESPACE, tail_lines: in
                 "name": name,
                 "namespace": namespace,
                 "logs": "",
-                "message": "No pods found for this model. The model may not be running yet."
+                "message": "No pods found for this app. The app may not be running yet or scaled to zero."
             }
 
         # Get the most recent pod (by creation time)
@@ -449,13 +420,11 @@ async def get_logs(name: str, namespace: str = DEFAULT_NAMESPACE, tail_lines: in
 
         # Check if pod is ready
         if latest_pod.status.phase not in ["Running", "Succeeded"]:
-            # Try to get logs anyway, but add a warning
             try:
                 logs = core_v1.read_namespaced_pod_log(
                     name=pod_name,
                     namespace=namespace,
-                    tail_lines=tail_lines,
-                    container="kserve-container"
+                    tail_lines=tail_lines
                 )
             except ApiException:
                 return {
@@ -467,24 +436,12 @@ async def get_logs(name: str, namespace: str = DEFAULT_NAMESPACE, tail_lines: in
                     "message": f"Pod is in {latest_pod.status.phase} state and logs are not available yet."
                 }
         else:
-            # Get logs from the kserve-container
-            try:
-                logs = core_v1.read_namespaced_pod_log(
-                    name=pod_name,
-                    namespace=namespace,
-                    tail_lines=tail_lines,
-                    container="kserve-container"
-                )
-            except ApiException as e:
-                if e.status == 400:
-                    # Container might not exist or not ready, try without specifying container
-                    logs = core_v1.read_namespaced_pod_log(
-                        name=pod_name,
-                        namespace=namespace,
-                        tail_lines=tail_lines
-                    )
-                else:
-                    raise
+            # Get logs from the user container
+            logs = core_v1.read_namespaced_pod_log(
+                name=pod_name,
+                namespace=namespace,
+                tail_lines=tail_lines
+            )
 
         return {
             "name": name,
