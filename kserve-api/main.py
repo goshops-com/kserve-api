@@ -287,6 +287,7 @@ async def deploy_app(request: DeploymentRequest):
 
     except ApiException as e:
         logger.error(f"Kubernetes API error: {e.status} - {e.reason}")
+        logger.error(f"Error body: {e.body}")
         raise HTTPException(status_code=e.status, detail=str(e.reason))
     except Exception as e:
         logger.error(f"Unexpected error: {str(e)}")
