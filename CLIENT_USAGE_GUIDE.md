@@ -57,8 +57,8 @@ echo "YOUR_DO_TOKEN" | \
 
 **For DigitalOcean (calvin-apps repo):**
 ```bash
-echo "YOUR_DO_TOKEN" | \
-  docker login registry.digitalocean.com -u YOUR_EMAIL --password-stdin
+echo "YOUR_DIGITALOCEAN_TOKEN" | \
+  docker login registry.digitalocean.com -u sjcotto@gmail.com --password-stdin
 ```
 
 ### Step 2: Build and Push

@@ -31,6 +31,41 @@ spec:
             secretKeyRef:
               name: scheduler-secrets
               key: REDIS_URL
+        - name: S3_ENDPOINT
+          valueFrom:
+            secretKeyRef:
+              name: scheduler-secrets
+              key: S3_ENDPOINT
+        - name: S3_REGION
+          valueFrom:
+            secretKeyRef:
+              name: scheduler-secrets
+              key: S3_REGION
+        - name: S3_BUCKET
+          valueFrom:
+            secretKeyRef:
+              name: scheduler-secrets
+              key: S3_BUCKET
+        - name: S3_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: scheduler-secrets
+              key: S3_ACCESS_KEY
+        - name: S3_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: scheduler-secrets
+              key: S3_SECRET_KEY
+        - name: METRICS_BUFFER_SIZE
+          valueFrom:
+            secretKeyRef:
+              name: scheduler-secrets
+              key: METRICS_BUFFER_SIZE
+        - name: METRICS_FLUSH_INTERVAL
+          valueFrom:
+            secretKeyRef:
+              name: scheduler-secrets
+              key: METRICS_FLUSH_INTERVAL
         resources:
           requests:
             memory: "128Mi"

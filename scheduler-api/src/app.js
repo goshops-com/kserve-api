@@ -1,5 +1,7 @@
 import express from 'express';
 import workspaceRoutes from './routes/workspace.routes.js';
+import metricsRoutes from './routes/metrics.routes.js';
+import { serverAdapter } from './config/bullboard.js';
 
 const app = express();
 
@@ -23,6 +25,12 @@ app.get('/health', (req, res) => {
 
 // API routes
 app.use('/api/workspaces', workspaceRoutes);
+
+// Metrics dashboard
+app.use('/metrics', metricsRoutes);
+
+// Bull Board dashboard
+app.use('/admin/queues', serverAdapter.getRouter());
 
 // 404 handler
 app.use((req, res) => {

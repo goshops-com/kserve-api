@@ -88,8 +88,8 @@ docker buildx build \
 ### For DigitalOcean calvin-apps Registry
 ```bash
 # Login
-echo "YOUR_DO_TOKEN" | \
-  docker login registry.digitalocean.com -u YOUR_EMAIL --password-stdin
+echo "YOUR_DIGITALOCEAN_TOKEN" | \
+  docker login registry.digitalocean.com -u sjcotto@gmail.com --password-stdin
 
 # Build and push
 docker buildx build --push -t registry.digitalocean.com/calvin-apps/YOUR_APP:TAG .

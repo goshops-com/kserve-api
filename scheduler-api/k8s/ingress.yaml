@@ -1,0 +1,19 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: scheduler-api
+  namespace: default
+  annotations:
+    kubernetes.io/ingress.class: "kourier"
+spec:
+  rules:
+    - host: scheduler.calvinruntime.net
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: scheduler-api
+                port:
+                  number: 80

@@ -3,8 +3,8 @@
 ## Login
 
 ```bash
-echo "YOUR_DO_TOKEN" | \
-  docker login registry.digitalocean.com -u YOUR_EMAIL --password-stdin
+echo "YOUR_DIGITALOCEAN_TOKEN" | \
+  docker login registry.digitalocean.com -u sjcotto@gmail.com --password-stdin
 ```
 
 ## Build and Push Examples
@@ -118,8 +118,8 @@ After pushing, you can pull from any machine:
 
 ```bash
 # Login first
-echo "YOUR_DO_TOKEN" | \
-  docker login registry.digitalocean.com -u YOUR_EMAIL --password-stdin
+echo "YOUR_DIGITALOCEAN_TOKEN" | \
+  docker login registry.digitalocean.com -u sjcotto@gmail.com --password-stdin
 
 # Pull the image
 docker pull registry.digitalocean.com/calvin-apps/myapp:latest

@@ -19,6 +19,9 @@ API Endpoints:
   GET    /api/workspaces/:workspace_id/triggers
   DELETE /api/workspaces/:workspace_id/triggers
   GET    /health
+
+Dashboard:
+  GET    /admin/queues - BullMQ Dashboard
   `);
 });
 
