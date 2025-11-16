@@ -20,7 +20,7 @@ spec:
     spec:
       containers:
       - name: scheduler-api
-        image: registry.digitalocean.com/YOUR_REGISTRY/scheduler-api:latest
+        image: registry.digitalocean.com/calvin-apps/scheduler-api:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 3000

@@ -20,7 +20,7 @@ spec:
     spec:
       containers:
       - name: scheduler-worker
-        image: registry.digitalocean.com/YOUR_REGISTRY/scheduler-api:latest
+        image: registry.digitalocean.com/calvin-apps/scheduler-api:latest
         imagePullPolicy: Always
         command: ["node", "src/workers/trigger.worker.js"]
         env:
