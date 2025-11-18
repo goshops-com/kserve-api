@@ -82,7 +82,6 @@ def create_knative_service_spec(name: str, image: str, envs: Dict[str, str]) -> 
                 "spec": {
                     "containers": [{
                         "image": image,
-                        "imagePullPolicy": "Always",
                         "env": env_list,
                         "ports": [{
                             "containerPort": 8080,
