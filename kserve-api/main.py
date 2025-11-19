@@ -314,21 +314,18 @@ async def deploy_app(request: DeploymentRequest):
             )
             action = "updated"
 
-        # Create DomainMapping for subdomain (primary URL)
+        # Construct primary URL (Knative auto-configures subdomain, no DomainMapping needed)
         subdomain = f"{name}.{DOMAIN}"
-        create_or_update_domain_mapping(subdomain, name, namespace)
-
-        # Construct primary URL
         clean_url = f"https://{subdomain}"
 
-        # If custom domain is provided, create additional DomainMapping
+        # If custom domain is provided, create DomainMapping for it
         if request.custom_domain:
             logger.info(f"Creating DomainMapping for custom domain: {request.custom_domain}")
             create_or_update_domain_mapping(request.custom_domain, name, namespace)
             # Purge cache for custom domain
             purge_cloudflare_cache(request.custom_domain)
 
-        # Purge Cloudflare cache for primary subdomain
+        # Purge Cloudflare cache for subdomain
         purge_cloudflare_cache(subdomain)
 
         # Warm up the service to trigger pod creation and image pull (using primary URL)
@@ -421,11 +418,8 @@ async def delete_app(namespace: str, name: str):
         if existing is None:
             raise HTTPException(status_code=404, detail=f"App {name} not found in namespace {namespace}")
 
-        # Delete subdomain DomainMapping
-        subdomain = f"{name}.{DOMAIN}"
-        delete_domain_mapping(subdomain, namespace)
-
         # Note: Custom domain mappings need to be deleted manually if they exist
+        # Subdomain is auto-managed by Knative, no DomainMapping to delete
 
         # Delete Knative Service
         custom_api.delete_namespaced_custom_object(
