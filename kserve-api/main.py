@@ -5,6 +5,7 @@ from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 import logging
 import os
+import requests
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -33,6 +34,10 @@ DOMAIN_MAPPING_PLURAL = "domainmappings"
 DOMAIN_MAPPING_VERSION = "v1beta1"
 DEFAULT_NAMESPACE = os.getenv("DEFAULT_NAMESPACE", "default")
 DOMAIN = os.getenv("DOMAIN", "calvinruntime.net")
+
+# Cloudflare cache invalidation
+CLOUDFLARE_ZONE_ID = os.getenv("CLOUDFLARE_ZONE_ID")
+CLOUDFLARE_API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN")
 
 
 class DeploymentRequest(BaseModel):
@@ -204,6 +209,31 @@ def delete_domain_mapping(name: str, namespace: str):
         logger.error(f"Unexpected error deleting DomainMapping: {str(e)}")
 
 
+def purge_cloudflare_cache(domain: str):
+    """Purge Cloudflare cache for a domain after deployment"""
+    try:
+        url = f"https://api.cloudflare.com/client/v4/zones/{CLOUDFLARE_ZONE_ID}/purge_cache"
+        headers = {
+            "Authorization": f"Bearer {CLOUDFLARE_API_TOKEN}",
+            "Content-Type": "application/json"
+        }
+        data = {
+            "prefixes": [domain]
+        }
+
+        logger.info(f"Purging Cloudflare cache for {domain}")
+        response = requests.post(url, json=data, headers=headers, timeout=10)
+
+        if response.status_code == 200:
+            logger.info(f"Successfully purged Cloudflare cache for {domain}")
+        else:
+            logger.warning(f"Cloudflare cache purge failed: {response.status_code} - {response.text}")
+
+    except Exception as e:
+        logger.error(f"Error purging Cloudflare cache: {str(e)}")
+        # Don't fail the deployment if cache purge fails
+
+
 @app.get("/")
 async def root():
     return {
@@ -279,6 +309,10 @@ async def deploy_app(request: DeploymentRequest):
 
         # Construct URL
         clean_url = f"https://{name}.{DOMAIN}"
+
+        # Purge Cloudflare cache for the domain
+        domain_name = f"{name}.{DOMAIN}"
+        purge_cloudflare_cache(domain_name)
 
         return DeploymentResponse(
             name=name,
