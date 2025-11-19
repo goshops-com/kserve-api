@@ -234,6 +234,19 @@ def purge_cloudflare_cache(domain: str):
         # Don't fail the deployment if cache purge fails
 
 
+def warm_up_service(service_url: str):
+    """Make a warm-up request to trigger pod creation and image pull"""
+    try:
+        logger.info(f"Warming up service: {service_url}")
+        response = requests.get(service_url, timeout=15)
+        logger.info(f"Warm-up complete - Status: {response.status_code}, Pod is now running with new image")
+    except requests.exceptions.Timeout:
+        logger.warning(f"Warm-up request timed out (cold start may take longer than expected)")
+    except Exception as e:
+        logger.warning(f"Warm-up request failed: {str(e)}")
+        # Don't fail the deployment if warm-up fails
+
+
 @app.get("/")
 async def root():
     return {
@@ -313,6 +326,9 @@ async def deploy_app(request: DeploymentRequest):
         # Purge Cloudflare cache for the domain
         domain_name = f"{name}.{DOMAIN}"
         purge_cloudflare_cache(domain_name)
+
+        # Warm up the service to trigger pod creation and image pull
+        warm_up_service(clean_url)
 
         return DeploymentResponse(
             name=name,
