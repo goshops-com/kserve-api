@@ -45,6 +45,7 @@ class DeploymentRequest(BaseModel):
     image: str  # format: registry/path:tag
     envs: Optional[Dict[str, str]] = {}
     namespace: Optional[str] = DEFAULT_NAMESPACE
+    custom_domain: Optional[str] = None  # Optional custom domain (e.g., "myapp.example.com")
 
 
 class DeploymentResponse(BaseModel):
@@ -160,12 +161,9 @@ def get_domain_mapping(domain_name: str, namespace: str):
         raise
 
 
-def create_or_update_domain_mapping(name: str, namespace: str):
-    """Create or update DomainMapping for clean URL"""
+def create_or_update_domain_mapping(domain_name: str, service_name: str, namespace: str):
+    """Create or update DomainMapping for a domain"""
     try:
-        domain_name = f"{name}.{DOMAIN}"
-        service_name = name  # Direct Knative Service name (no -predictor suffix)
-
         existing = get_domain_mapping(domain_name, namespace)
         mapping_spec = create_domain_mapping_spec(domain_name, service_name, namespace)
 
@@ -188,10 +186,9 @@ def create_or_update_domain_mapping(name: str, namespace: str):
         logger.error(f"Unexpected error creating DomainMapping: {str(e)}")
 
 
-def delete_domain_mapping(name: str, namespace: str):
-    """Delete DomainMapping"""
+def delete_domain_mapping(domain_name: str, namespace: str):
+    """Delete DomainMapping for a specific domain"""
     try:
-        domain_name = f"{name}.{DOMAIN}"
         existing = get_domain_mapping(domain_name, namespace)
 
         if existing is not None:
@@ -317,17 +314,24 @@ async def deploy_app(request: DeploymentRequest):
             )
             action = "updated"
 
-        # Create DomainMapping for clean URL
-        create_or_update_domain_mapping(name, namespace)
+        # Create DomainMapping for subdomain (primary URL)
+        subdomain = f"{name}.{DOMAIN}"
+        create_or_update_domain_mapping(subdomain, name, namespace)
 
-        # Construct URL
-        clean_url = f"https://{name}.{DOMAIN}"
+        # Construct primary URL
+        clean_url = f"https://{subdomain}"
 
-        # Purge Cloudflare cache for the domain
-        domain_name = f"{name}.{DOMAIN}"
-        purge_cloudflare_cache(domain_name)
+        # If custom domain is provided, create additional DomainMapping
+        if request.custom_domain:
+            logger.info(f"Creating DomainMapping for custom domain: {request.custom_domain}")
+            create_or_update_domain_mapping(request.custom_domain, name, namespace)
+            # Purge cache for custom domain
+            purge_cloudflare_cache(request.custom_domain)
 
-        # Warm up the service to trigger pod creation and image pull
+        # Purge Cloudflare cache for primary subdomain
+        purge_cloudflare_cache(subdomain)
+
+        # Warm up the service to trigger pod creation and image pull (using primary URL)
         warm_up_service(clean_url)
 
         return DeploymentResponse(
@@ -417,8 +421,11 @@ async def delete_app(namespace: str, name: str):
         if existing is None:
             raise HTTPException(status_code=404, detail=f"App {name} not found in namespace {namespace}")
 
-        # Delete DomainMapping first
-        delete_domain_mapping(name, namespace)
+        # Delete subdomain DomainMapping
+        subdomain = f"{name}.{DOMAIN}"
+        delete_domain_mapping(subdomain, namespace)
+
+        # Note: Custom domain mappings need to be deleted manually if they exist
 
         # Delete Knative Service
         custom_api.delete_namespaced_custom_object(
