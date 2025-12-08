@@ -15,6 +15,14 @@ app.use((req, res, next) => {
   next();
 });
 
+// Root endpoint (needed for Knative/Kourier probing)
+app.get('/', (req, res) => {
+  res.status(200).json({
+    service: 'scheduler-api',
+    status: 'ok',
+  });
+});
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.status(200).json({

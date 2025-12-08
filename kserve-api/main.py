@@ -35,9 +35,10 @@ DOMAIN_MAPPING_VERSION = "v1beta1"
 DEFAULT_NAMESPACE = os.getenv("DEFAULT_NAMESPACE", "default")
 DOMAIN = os.getenv("DOMAIN", "calvinruntime.net")
 
-# Cloudflare cache invalidation
+# Cloudflare cache invalidation and analytics
 CLOUDFLARE_ZONE_ID = os.getenv("CLOUDFLARE_ZONE_ID")
 CLOUDFLARE_API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN")
+CLOUDFLARE_ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID", "920b1a6e159cf77dab28969103a4765b")
 
 
 class DeploymentRequest(BaseModel):
@@ -252,6 +253,9 @@ async def root():
         "platform": "Knative Serving",
         "endpoints": {
             "health": "/health",
+            "analytics": "/analytics (GET)",
+            "web_analytics": "/web-analytics (GET)",
+            "web_performance": "/web-performance (GET)",
             "deploy": "/deploy (POST)",
             "list": "/apps (GET)",
             "get": "/apps/{namespace}/{name} (GET)",
@@ -264,6 +268,501 @@ async def root():
 @app.get("/health")
 async def health():
     return {"status": "healthy"}
+
+
+@app.get("/analytics")
+async def get_analytics(
+    service_name: Optional[str] = None,
+    hours: int = 24
+):
+    """
+    Get Cloudflare analytics for Knative services
+
+    Args:
+        service_name: Optional specific service name (e.g., 'kserve-api')
+        hours: Number of hours to query (default: 24)
+
+    Returns:
+        Analytics data with requests, bandwidth, status codes, latency
+    """
+    try:
+        from datetime import datetime, timedelta
+
+        # Calculate time range
+        end_time = datetime.utcnow()
+        start_time = end_time - timedelta(hours=hours)
+
+        # Cloudflare GraphQL endpoint
+        graphql_url = "https://api.cloudflare.com/client/v4/graphql"
+        headers = {
+            "Authorization": f"Bearer {CLOUDFLARE_API_TOKEN}",
+            "Content-Type": "application/json"
+        }
+
+        # Build hostname filter
+        if service_name:
+            # If service_name is a full domain (has dots), use as-is
+            # Otherwise append default domain
+            if "." in service_name and not service_name.endswith(f".{DOMAIN}"):
+                hostname = service_name
+            else:
+                hostname = f"{service_name}.{DOMAIN}" if "." not in service_name else service_name
+            hostname_filter = f', clientRequestHTTPHost: "{hostname}"'
+        else:
+            hostname_filter = ""
+
+        # GraphQL query for metrics
+        query = """
+        query GetMetrics($zoneTag: string, $startTime: Time!, $endTime: Time!) {
+            viewer {
+                zones(filter: { zoneTag: $zoneTag }) {
+                    httpRequestsAdaptiveGroups(
+                        filter: {
+                            datetime_geq: $startTime,
+                            datetime_lt: $endTime%s
+                        },
+                        limit: 1000,
+                        orderBy: [datetimeHour_DESC]
+                    ) {
+                        count
+                        dimensions {
+                            datetimeHour
+                            clientRequestHTTPHost
+                            edgeResponseStatus
+                        }
+                    }
+                }
+            }
+        }
+        """ % hostname_filter
+
+        variables = {
+            "zoneTag": CLOUDFLARE_ZONE_ID,
+            "startTime": start_time.isoformat() + "Z",
+            "endTime": end_time.isoformat() + "Z"
+        }
+
+        # Make request to Cloudflare
+        logger.info(f"Querying Cloudflare analytics: {start_time} to {end_time}")
+        response = requests.post(
+            graphql_url,
+            headers=headers,
+            json={"query": query, "variables": variables},
+            timeout=30
+        )
+        response.raise_for_status()
+
+        result = response.json()
+
+        # Parse and format response
+        if "errors" in result and result["errors"] is not None:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Cloudflare API error: {result['errors']}"
+            )
+
+        groups = result.get("data", {}).get("viewer", {}).get("zones", [{}])[0].get("httpRequestsAdaptiveGroups", [])
+
+        # Transform to readable format
+        metrics = []
+        for group in groups:
+            dims = group["dimensions"]
+            count = group.get("count", 0)
+
+            hostname = dims.get("clientRequestHTTPHost", "")
+            # Extract service name from hostname
+            if hostname.endswith(f".{DOMAIN}"):
+                svc_name = hostname.replace(f".{DOMAIN}", "")
+            else:
+                svc_name = hostname
+
+            metrics.append({
+                "timestamp": dims["datetimeHour"],
+                "service_name": svc_name,
+                "hostname": hostname,
+                "status_code": dims.get("edgeResponseStatus"),
+                "requests": count
+            })
+
+        # Calculate summary stats
+        total_requests = sum(m["requests"] for m in metrics)
+        unique_services = len(set(m["service_name"] for m in metrics))
+
+        return {
+            "summary": {
+                "total_requests": total_requests,
+                "unique_services": unique_services,
+                "unique_hostnames": len(set(m["hostname"] for m in metrics)),
+                "time_range": {
+                    "start": start_time.isoformat() + "Z",
+                    "end": end_time.isoformat() + "Z",
+                    "hours": hours
+                }
+            },
+            "metrics": metrics,
+            "count": len(metrics)
+        }
+
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Cloudflare API request error: {str(e)}")
+        raise HTTPException(status_code=502, detail=f"Cloudflare API error: {str(e)}")
+    except Exception as e:
+        logger.error(f"Analytics error: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error: {type(e).__name__}: {str(e)}")
+
+
+@app.get("/web-analytics")
+async def get_web_analytics(
+    host: Optional[str] = None,
+    hours: int = 24
+):
+    """
+    Get Cloudflare Web Analytics (RUM) data - page views, visits, performance
+
+    Args:
+        host: Optional hostname filter (e.g., 'www.gopersonal.com')
+        hours: Number of hours to query (default: 24)
+
+    Returns:
+        Web analytics data with page loads, visits by host and path
+    """
+    try:
+        from datetime import datetime, timedelta
+
+        # Calculate time range
+        end_time = datetime.utcnow()
+        start_time = end_time - timedelta(hours=hours)
+
+        # Cloudflare GraphQL endpoint
+        graphql_url = "https://api.cloudflare.com/client/v4/graphql"
+        headers = {
+            "Authorization": f"Bearer {CLOUDFLARE_API_TOKEN}",
+            "Content-Type": "application/json"
+        }
+
+        # Build hostname filter for the GraphQL query
+        if host:
+            host_filter = f', requestHost: "{host}"'
+        else:
+            host_filter = ""
+
+        # GraphQL query for Web Analytics (RUM) page loads
+        query = """
+        query PageLoads($accountTag: string, $startTime: Time!, $endTime: Time!) {
+            viewer {
+                accounts(filter: { accountTag: $accountTag }) {
+                    rumPageloadEventsAdaptiveGroups(
+                        filter: {
+                            datetime_geq: $startTime,
+                            datetime_lt: $endTime%s
+                        },
+                        limit: 1000,
+                        orderBy: [datetimeHour_DESC]
+                    ) {
+                        count
+                        dimensions {
+                            datetimeHour
+                            requestHost
+                            requestPath
+                        }
+                        sum {
+                            visits
+                        }
+                    }
+                }
+            }
+        }
+        """ % host_filter
+
+        variables = {
+            "accountTag": CLOUDFLARE_ACCOUNT_ID,
+            "startTime": start_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "endTime": end_time.strftime("%Y-%m-%dT%H:%M:%SZ")
+        }
+
+        # Make request to Cloudflare
+        logger.info(f"Querying Cloudflare Web Analytics: {start_time} to {end_time}")
+        response = requests.post(
+            graphql_url,
+            headers=headers,
+            json={"query": query, "variables": variables},
+            timeout=30
+        )
+        response.raise_for_status()
+
+        result = response.json()
+
+        # Parse and format response
+        if "errors" in result and result["errors"] is not None:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Cloudflare API error: {result['errors']}"
+            )
+
+        groups = result.get("data", {}).get("viewer", {}).get("accounts", [{}])[0].get("rumPageloadEventsAdaptiveGroups", [])
+
+        # Transform to readable format
+        page_views = []
+        for group in groups:
+            dims = group["dimensions"]
+            page_loads = group.get("count", 0)
+            visits = group.get("sum", {}).get("visits", 0)
+
+            page_views.append({
+                "timestamp": dims["datetimeHour"],
+                "host": dims.get("requestHost", ""),
+                "path": dims.get("requestPath", ""),
+                "page_loads": page_loads,
+                "visits": visits
+            })
+
+        # Calculate summary stats
+        total_page_loads = sum(pv["page_loads"] for pv in page_views)
+        total_visits = sum(pv["visits"] for pv in page_views)
+        unique_hosts = len(set(pv["host"] for pv in page_views if pv["host"]))
+        unique_paths = len(set(f"{pv['host']}{pv['path']}" for pv in page_views))
+
+        return {
+            "summary": {
+                "total_page_loads": total_page_loads,
+                "total_visits": total_visits,
+                "unique_hosts": unique_hosts,
+                "unique_paths": unique_paths,
+                "time_range": {
+                    "start": start_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "end": end_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "hours": hours
+                }
+            },
+            "page_views": page_views,
+            "count": len(page_views)
+        }
+
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Cloudflare API request error: {str(e)}")
+        raise HTTPException(status_code=502, detail=f"Cloudflare API error: {str(e)}")
+    except Exception as e:
+        logger.error(f"Web Analytics error: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error: {type(e).__name__}: {str(e)}")
+
+
+@app.get("/web-performance")
+async def get_web_performance(
+    host: Optional[str] = None,
+    hours: int = 24
+):
+    """
+    Get Cloudflare Web Performance metrics - Core Web Vitals, timing data
+
+    Args:
+        host: Optional hostname filter (e.g., 'www.gopersonal.com')
+        hours: Number of hours to query (default: 24)
+
+    Returns:
+        Web performance data with Core Web Vitals (LCP, FID, CLS, TTFB) and timing metrics
+    """
+    try:
+        from datetime import datetime, timedelta
+
+        # Calculate time range
+        end_time = datetime.utcnow()
+        start_time = end_time - timedelta(hours=hours)
+
+        # Cloudflare GraphQL endpoint
+        graphql_url = "https://api.cloudflare.com/client/v4/graphql"
+        headers = {
+            "Authorization": f"Bearer {CLOUDFLARE_API_TOKEN}",
+            "Content-Type": "application/json"
+        }
+
+        # Build hostname filter for the GraphQL query
+        if host:
+            host_filter = f', requestHost: "{host}"'
+        else:
+            host_filter = ""
+
+        # GraphQL query for Web Performance metrics - combine timing and web vitals
+        query = """
+        query WebPerformance($accountTag: string, $startTime: Time!, $endTime: Time!) {
+            viewer {
+                accounts(filter: { accountTag: $accountTag }) {
+                    performance: rumPerformanceEventsAdaptiveGroups(
+                        filter: {
+                            datetime_geq: $startTime,
+                            datetime_lt: $endTime%s
+                        },
+                        limit: 1000,
+                        orderBy: [datetimeHour_DESC]
+                    ) {
+                        count
+                        dimensions {
+                            datetimeHour
+                            requestHost
+                        }
+                        quantiles {
+                            pageLoadTimeP75
+                            dnsTimeP75
+                            connectionTimeP75
+                            requestTimeP75
+                            responseTimeP75
+                            firstContentfulPaintP75
+                        }
+                    }
+                    webVitals: rumWebVitalsEventsAdaptiveGroups(
+                        filter: {
+                            datetime_geq: $startTime,
+                            datetime_lt: $endTime%s
+                        },
+                        limit: 1000,
+                        orderBy: [datetimeHour_DESC]
+                    ) {
+                        count
+                        dimensions {
+                            datetimeHour
+                            requestHost
+                        }
+                        quantiles {
+                            largestContentfulPaintP75
+                            firstInputDelayP75
+                            cumulativeLayoutShiftP75
+                            timeToFirstByteP75
+                            firstContentfulPaintP75
+                        }
+                    }
+                }
+            }
+        }
+        """ % (host_filter, host_filter)
+
+        variables = {
+            "accountTag": CLOUDFLARE_ACCOUNT_ID,
+            "startTime": start_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "endTime": end_time.strftime("%Y-%m-%dT%H:%M:%SZ")
+        }
+
+        # Make request to Cloudflare
+        logger.info(f"Querying Cloudflare Web Performance: {start_time} to {end_time}")
+        response = requests.post(
+            graphql_url,
+            headers=headers,
+            json={"query": query, "variables": variables},
+            timeout=30
+        )
+        response.raise_for_status()
+
+        result = response.json()
+
+        # Parse and format response
+        if "errors" in result and result["errors"] is not None:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Cloudflare API error: {result['errors']}"
+            )
+
+        account_data = result.get("data", {}).get("viewer", {}).get("accounts", [{}])[0]
+        perf_groups = account_data.get("performance", [])
+        vitals_groups = account_data.get("webVitals", [])
+
+        # Merge performance timing and web vitals by timestamp and host
+        combined_data = {}
+
+        # Process performance timing metrics
+        for group in perf_groups:
+            dims = group["dimensions"]
+            key = (dims["datetimeHour"], dims.get("requestHost", ""))
+            quantiles = group.get("quantiles", {})
+
+            combined_data[key] = {
+                "timestamp": dims["datetimeHour"],
+                "host": dims.get("requestHost", ""),
+                "sample_count": group.get("count", 0),
+                "timing_p75": {
+                    "page_load_ms": round(quantiles.get("pageLoadTimeP75", 0) / 1000, 2),
+                    "dns_ms": round(quantiles.get("dnsTimeP75", 0) / 1000, 2),
+                    "connection_ms": round(quantiles.get("connectionTimeP75", 0) / 1000, 2),
+                    "request_ms": round(quantiles.get("requestTimeP75", 0) / 1000, 2),
+                    "response_ms": round(quantiles.get("responseTimeP75", 0) / 1000, 2),
+                    "fcp_ms": round(quantiles.get("firstContentfulPaintP75", 0) / 1000, 2)
+                },
+                "web_vitals_p75": {}
+            }
+
+        # Add web vitals data
+        for group in vitals_groups:
+            dims = group["dimensions"]
+            key = (dims["datetimeHour"], dims.get("requestHost", ""))
+            quantiles = group.get("quantiles", {})
+
+            # Convert from microseconds to milliseconds (divide by 1000)
+            vitals = {
+                "lcp_ms": round(quantiles.get("largestContentfulPaintP75", 0) / 1000, 2),
+                "fid_ms": round(quantiles.get("firstInputDelayP75", 0) / 1000, 2) if quantiles.get("firstInputDelayP75", 0) > 0 else 0,
+                "cls": round(quantiles.get("cumulativeLayoutShiftP75", 0), 4),
+                "ttfb_ms": round(quantiles.get("timeToFirstByteP75", 0) / 1000, 2),
+                "fcp_ms": round(quantiles.get("firstContentfulPaintP75", 0) / 1000, 2)
+            }
+
+            if key in combined_data:
+                combined_data[key]["web_vitals_p75"] = vitals
+            else:
+                combined_data[key] = {
+                    "timestamp": dims["datetimeHour"],
+                    "host": dims.get("requestHost", ""),
+                    "sample_count": group.get("count", 0),
+                    "timing_p75": {},
+                    "web_vitals_p75": vitals
+                }
+
+        performance_data = list(combined_data.values())
+
+        # Calculate summary stats
+        total_samples = sum(pd["sample_count"] for pd in performance_data)
+        unique_hosts = len(set(pd["host"] for pd in performance_data if pd["host"]))
+
+        # Calculate averages for Core Web Vitals
+        lcp_vals = [pd["web_vitals_p75"].get("lcp_ms", 0) for pd in performance_data if pd.get("web_vitals_p75", {}).get("lcp_ms", 0) > 0]
+        fid_vals = [pd["web_vitals_p75"].get("fid_ms", 0) for pd in performance_data if pd.get("web_vitals_p75", {}).get("fid_ms", 0) > 0]
+        cls_vals = [pd["web_vitals_p75"].get("cls", 0) for pd in performance_data if pd.get("web_vitals_p75", {}).get("cls", 0) > 0]
+        ttfb_vals = [pd["web_vitals_p75"].get("ttfb_ms", 0) for pd in performance_data if pd.get("web_vitals_p75", {}).get("ttfb_ms", 0) > 0]
+        page_load_vals = [pd["timing_p75"].get("page_load_ms", 0) for pd in performance_data if pd.get("timing_p75", {}).get("page_load_ms", 0) > 0]
+
+        return {
+            "summary": {
+                "total_samples": total_samples,
+                "unique_hosts": unique_hosts,
+                "avg_web_vitals_p75": {
+                    "lcp_ms": round(sum(lcp_vals) / len(lcp_vals), 2) if lcp_vals else 0,
+                    "fid_ms": round(sum(fid_vals) / len(fid_vals), 2) if fid_vals else 0,
+                    "cls": round(sum(cls_vals) / len(cls_vals), 4) if cls_vals else 0,
+                    "ttfb_ms": round(sum(ttfb_vals) / len(ttfb_vals), 2) if ttfb_vals else 0
+                },
+                "avg_timing_p75": {
+                    "page_load_ms": round(sum(page_load_vals) / len(page_load_vals), 2) if page_load_vals else 0
+                },
+                "time_range": {
+                    "start": start_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "end": end_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "hours": hours
+                },
+                "notes": {
+                    "lcp": "Largest Contentful Paint - loading performance (good: <2.5s)",
+                    "fid": "First Input Delay - interactivity (good: <100ms)",
+                    "cls": "Cumulative Layout Shift - visual stability (good: <0.1)",
+                    "ttfb": "Time to First Byte - server response (good: <800ms)",
+                    "page_load": "Total page load time",
+                    "p75": "75th percentile - 75% of users experience this or better"
+                }
+            },
+            "performance_data": performance_data,
+            "count": len(performance_data)
+        }
+
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Cloudflare API request error: {str(e)}")
+        raise HTTPException(status_code=502, detail=f"Cloudflare API error: {str(e)}")
+    except Exception as e:
+        logger.error(f"Web Performance error: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error: {type(e).__name__}: {str(e)}")
 
 
 @app.post("/deploy", response_model=DeploymentResponse)
