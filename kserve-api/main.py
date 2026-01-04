@@ -6,6 +6,7 @@ from kubernetes.client.rest import ApiException
 import logging
 import os
 import requests
+import time
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -215,8 +216,9 @@ def purge_cloudflare_cache(domain: str):
             "Authorization": f"Bearer {CLOUDFLARE_API_TOKEN}",
             "Content-Type": "application/json"
         }
+        # Use 'hosts' for hostname-based purging (not 'prefixes' which expects URL paths)
         data = {
-            "prefixes": [domain]
+            "hosts": [domain]
         }
 
         logger.info(f"Purging Cloudflare cache for {domain}")
@@ -826,6 +828,11 @@ async def deploy_app(request: DeploymentRequest):
 
         # Purge Cloudflare cache for subdomain
         purge_cloudflare_cache(subdomain)
+
+        # Wait for cache purge to propagate to Cloudflare edge locations
+        # This prevents the warm-up request from re-caching stale content
+        logger.info("Waiting 3 seconds for cache purge to propagate...")
+        time.sleep(3)
 
         # Warm up the service to trigger pod creation and image pull (using primary URL)
         warm_up_service(clean_url)
