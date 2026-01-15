@@ -2,6 +2,9 @@ import app from './app.js';
 import { config } from './config/app.js';
 import { redisConnection } from './config/redis.js';
 
+// Import and start the worker (processes scheduled jobs)
+import './workers/trigger.worker.js';
+
 const PORT = config.port;
 
 // Start server
