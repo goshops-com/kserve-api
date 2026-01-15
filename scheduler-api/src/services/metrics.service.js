@@ -19,8 +19,8 @@ export class MetricsService {
 
     this.bucket = process.env.S3_BUCKET || 'scheduler-metrics';
     this.metricsBuffer = [];
-    this.bufferSize = parseInt(process.env.METRICS_BUFFER_SIZE) || 100;
-    this.flushInterval = parseInt(process.env.METRICS_FLUSH_INTERVAL) || 300000; // 5 minutes
+    this.bufferSize = parseInt(process.env.METRICS_BUFFER_SIZE) || 10;
+    this.flushInterval = parseInt(process.env.METRICS_FLUSH_INTERVAL) || 60000; // 1 minute
 
     // Auto-flush timer
     this.startAutoFlush();
