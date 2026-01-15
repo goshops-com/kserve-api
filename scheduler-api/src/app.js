@@ -2,6 +2,7 @@ import express from 'express';
 import workspaceRoutes from './routes/workspace.routes.js';
 import metricsRoutes from './routes/metrics.routes.js';
 import { serverAdapter } from './config/bullboard.js';
+import { triggerQueue } from './queue/trigger.queue.js';
 
 const app = express();
 
@@ -39,6 +40,19 @@ app.use('/metrics', metricsRoutes);
 
 // Bull Board dashboard
 app.use('/admin/queues', serverAdapter.getRouter());
+
+// Debug endpoint to list all repeatable jobs
+app.get('/debug/jobs', async (req, res) => {
+  try {
+    const repeatableJobs = await triggerQueue.getRepeatableJobs();
+    res.json({
+      count: repeatableJobs.length,
+      jobs: repeatableJobs,
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
 // 404 handler
 app.use((req, res) => {

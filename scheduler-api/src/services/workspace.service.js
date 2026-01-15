@@ -101,8 +101,8 @@ export class WorkspaceService {
 
       // Filter and remove jobs for this workspace
       for (const job of repeatableJobs) {
-        // Check if job ID starts with workspace_id
-        if (job.key && job.key.includes(workspace_id)) {
+        // Check if job name contains workspace_id
+        if (job.name && job.name.includes(workspace_id)) {
           await triggerQueue.removeRepeatableByKey(job.key);
           removedCount++;
         }
@@ -153,6 +153,6 @@ export class WorkspaceService {
   async getWorkspaceJobs(workspace_id) {
     const repeatableJobs = await triggerQueue.getRepeatableJobs();
 
-    return repeatableJobs.filter(job => job.key && job.key.includes(workspace_id));
+    return repeatableJobs.filter(job => job.name && job.name.includes(workspace_id));
   }
 }
