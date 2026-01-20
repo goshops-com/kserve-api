@@ -48,10 +48,8 @@ export class MetricsQueryService {
           continue;
         }
 
-        // Sort by last modified descending
-        const files = listResult.Contents.sort((a, b) =>
-          new Date(b.LastModified) - new Date(a.LastModified)
-        ).slice(0, 10);
+        // Read all files returned (don't skip any - metrics could be in any file)
+        const files = listResult.Contents;
 
         // Fetch and parse each file
         for (const file of files) {
