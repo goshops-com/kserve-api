@@ -31,14 +31,21 @@ router.get('/api/:workspace_id', async (req, res) => {
     let nextExecution = null;
     try {
       const delayed = await triggerQueue.getDelayed(0, 100);
+      console.log(`[metrics] Found ${delayed.length} delayed jobs for workspace lookup: ${workspace_id}`);
       const workspaceJob = delayed.find(j => j.name && j.name.includes(workspace_id));
       if (workspaceJob) {
         // The next execution time is in opts.prevMillis (the scheduled timestamp)
         const nextTime = workspaceJob.opts?.prevMillis || (workspaceJob.timestamp + (workspaceJob.delay || 0));
+        console.log(`[metrics] Found job ${workspaceJob.name}, nextTime: ${nextTime}`);
         nextExecution = new Date(nextTime).toISOString();
+      } else {
+        console.log(`[metrics] No delayed job found matching workspace ${workspace_id}`);
+        if (delayed.length > 0) {
+          console.log(`[metrics] Available job names: ${delayed.map(j => j.name).join(', ')}`);
+        }
       }
     } catch (e) {
-      console.error('Error fetching next execution:', e.message);
+      console.error('Error fetching next execution:', e.message, e.stack);
     }
 
     res.status(200).json({
