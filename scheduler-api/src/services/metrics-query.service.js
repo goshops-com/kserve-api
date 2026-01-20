@@ -2,6 +2,7 @@ import { S3Client, ListObjectsV2Command, GetObjectCommand } from '@aws-sdk/clien
 
 /**
  * Service for querying metrics from S3
+ * Path structure: metrics/workspace={workspace_id}/year={year}/month={month}/day={day}/hour={hour}/
  */
 export class MetricsQueryService {
   constructor() {
@@ -23,13 +24,11 @@ export class MetricsQueryService {
    */
   async getWorkspaceMetrics(workspaceId, limit = 100) {
     try {
-      // List recent metric files - search last 7 days by hour
       const now = new Date();
       const allMetrics = [];
 
-      // Search each hour for the last 7 days (168 hours)
-      // Process in parallel batches for speed
-      const BATCH_SIZE = 12; // Process 12 hours at a time
+      // Search last 7 days - direct path to workspace metrics
+      const BATCH_SIZE = 24; // Process 24 hours at a time
 
       for (let batchStart = 0; batchStart < 168 && allMetrics.length < limit; batchStart += BATCH_SIZE) {
         const batchPromises = [];
@@ -40,9 +39,14 @@ export class MetricsQueryService {
           const month = String(date.getUTCMonth() + 1).padStart(2, '0');
           const day = String(date.getUTCDate()).padStart(2, '0');
           const hour = String(date.getUTCHours()).padStart(2, '0');
-          const prefix = `metrics/year=${year}/month=${month}/day=${day}/hour=${hour}/`;
 
-          batchPromises.push(this.fetchHourMetrics(prefix, workspaceId));
+          // New path: workspace first, then time
+          const newPrefix = `metrics/workspace=${workspaceId}/year=${year}/month=${month}/day=${day}/hour=${hour}/`;
+          // Old path for backwards compatibility
+          const oldPrefix = `metrics/year=${year}/month=${month}/day=${day}/hour=${hour}/`;
+
+          batchPromises.push(this.fetchWorkspaceHourMetrics(newPrefix));
+          batchPromises.push(this.fetchOldHourMetrics(oldPrefix, workspaceId));
         }
 
         const batchResults = await Promise.all(batchPromises);
@@ -51,8 +55,17 @@ export class MetricsQueryService {
         }
       }
 
+      // Dedupe by timestamp + job_id
+      const seen = new Set();
+      const uniqueMetrics = allMetrics.filter(m => {
+        const key = `${m.timestamp}-${m.job_id}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+
       // Sort by timestamp descending and limit
-      const sortedMetrics = allMetrics
+      const sortedMetrics = uniqueMetrics
         .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
         .slice(0, limit);
 
@@ -72,15 +85,15 @@ export class MetricsQueryService {
   }
 
   /**
-   * Fetch metrics for a specific hour prefix
+   * Fetch metrics from new workspace-partitioned path (no filtering needed)
    */
-  async fetchHourMetrics(prefix, workspaceId) {
+  async fetchWorkspaceHourMetrics(prefix) {
     const hourMetrics = [];
     try {
       const listCommand = new ListObjectsV2Command({
         Bucket: this.bucket,
         Prefix: prefix,
-        MaxKeys: 10, // Limit files per hour
+        MaxKeys: 50,
       });
 
       const listResult = await this.s3Client.send(listCommand);
@@ -89,7 +102,53 @@ export class MetricsQueryService {
         return hourMetrics;
       }
 
-      // Read files in parallel
+      // Read all files in parallel - no filtering needed, all belong to this workspace
+      const filePromises = listResult.Contents.map(async (file) => {
+        try {
+          const getCommand = new GetObjectCommand({
+            Bucket: this.bucket,
+            Key: file.Key,
+          });
+          const result = await this.s3Client.send(getCommand);
+          const body = await result.Body.transformToString();
+          return JSON.parse(body);
+        } catch (e) {
+          return [];
+        }
+      });
+
+      const results = await Promise.all(filePromises);
+      for (const metrics of results) {
+        if (Array.isArray(metrics)) {
+          hourMetrics.push(...metrics);
+        } else {
+          hourMetrics.push(metrics);
+        }
+      }
+    } catch (e) {
+      // Skip hours that can't be read
+    }
+    return hourMetrics;
+  }
+
+  /**
+   * Fetch metrics from old path structure (requires filtering)
+   */
+  async fetchOldHourMetrics(prefix, workspaceId) {
+    const hourMetrics = [];
+    try {
+      const listCommand = new ListObjectsV2Command({
+        Bucket: this.bucket,
+        Prefix: prefix,
+        MaxKeys: 5, // Limit old path reads
+      });
+
+      const listResult = await this.s3Client.send(listCommand);
+
+      if (!listResult.Contents || listResult.Contents.length === 0) {
+        return hourMetrics;
+      }
+
       const filePromises = listResult.Contents.map(async (file) => {
         try {
           const getCommand = new GetObjectCommand({
@@ -126,6 +185,7 @@ export class MetricsQueryService {
         failed: 0,
         success_rate: 0,
         avg_duration: 0,
+        chart_data: [],
       };
     }
 
@@ -151,7 +211,7 @@ export class MetricsQueryService {
         failed: counts.failed,
       }))
       .sort((a, b) => a.hour.localeCompare(b.hour))
-      .slice(-24); // Last 24 hours
+      .slice(-168); // Last 7 days of hourly data
 
     return {
       total: metrics.length,

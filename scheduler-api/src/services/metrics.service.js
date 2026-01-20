@@ -77,7 +77,7 @@ export class MetricsService {
   }
 
   /**
-   * Write metrics to S3 as Parquet file
+   * Write metrics to S3, partitioned by workspace
    */
   async writeToS3(metrics) {
     const now = new Date();
@@ -87,26 +87,41 @@ export class MetricsService {
     const hour = String(now.getUTCHours()).padStart(2, '0');
     const timestamp = now.getTime();
 
-    // S3 key with date partitioning
-    const key = `metrics/year=${year}/month=${month}/day=${day}/hour=${hour}/metrics-${timestamp}.json`;
+    // Group metrics by workspace_id
+    const byWorkspace = {};
+    for (const metric of metrics) {
+      const ws = metric.workspace_id;
+      if (!byWorkspace[ws]) {
+        byWorkspace[ws] = [];
+      }
+      byWorkspace[ws].push(metric);
+    }
 
-    // For now, write as JSON (we can add Parquet later with proper implementation)
-    const jsonData = JSON.stringify(metrics, null, 2);
-    const buffer = Buffer.from(jsonData, 'utf-8');
+    // Write a file per workspace
+    const writePromises = Object.entries(byWorkspace).map(async ([workspaceId, wsMetrics]) => {
+      // S3 key partitioned by workspace first, then time
+      const key = `metrics/workspace=${workspaceId}/year=${year}/month=${month}/day=${day}/hour=${hour}/metrics-${timestamp}.json`;
 
-    const command = new PutObjectCommand({
-      Bucket: this.bucket,
-      Key: key,
-      Body: buffer,
-      ContentType: 'application/json',
-      Metadata: {
-        'record-count': String(metrics.length),
-        'created-at': now.toISOString(),
-      },
+      const jsonData = JSON.stringify(wsMetrics, null, 2);
+      const buffer = Buffer.from(jsonData, 'utf-8');
+
+      const command = new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        Body: buffer,
+        ContentType: 'application/json',
+        Metadata: {
+          'record-count': String(wsMetrics.length),
+          'workspace-id': workspaceId,
+          'created-at': now.toISOString(),
+        },
+      });
+
+      await this.s3Client.send(command);
+      console.log(`📊 Wrote ${wsMetrics.length} metrics for ${workspaceId} to s3://${this.bucket}/${key}`);
     });
 
-    await this.s3Client.send(command);
-    console.log(`📊 Wrote ${metrics.length} metrics to s3://${this.bucket}/${key}`);
+    await Promise.all(writePromises);
   }
 
   /**
