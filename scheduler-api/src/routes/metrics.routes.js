@@ -33,9 +33,9 @@ router.get('/api/:workspace_id', async (req, res) => {
       const delayed = await triggerQueue.getDelayed(0, 100);
       const workspaceJob = delayed.find(j => j.name && j.name.includes(workspace_id));
       if (workspaceJob) {
-        // timestamp is when the job was created, delay is the delay in ms
-        // The actual scheduled time is stored in opts.repeat.every or we can calculate from job timestamp
-        nextExecution = workspaceJob.timestamp ? new Date(workspaceJob.timestamp).toISOString() : null;
+        // The next execution time is in opts.prevMillis (the scheduled timestamp)
+        const nextTime = workspaceJob.opts?.prevMillis || (workspaceJob.timestamp + (workspaceJob.delay || 0));
+        nextExecution = new Date(nextTime).toISOString();
       }
     } catch (e) {
       console.error('Error fetching next execution:', e.message);
