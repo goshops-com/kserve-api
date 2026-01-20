@@ -28,17 +28,23 @@ async function executeTrigger(job) {
     console.log(`[${workspace_id}] Trigger executed successfully: ${response.status}`);
 
     // Log metrics
-    await metricsService.logJobExecution({
-      workspace_id,
-      job_id: job.id,
-      job_name: job.name,
-      trigger_url: url,
-      trigger_method: method,
-      status: 'success',
-      duration_ms: duration,
-      http_status: response.status,
-      retry_count: job.attemptsMade,
-    });
+    console.log(`[${workspace_id}] About to log metrics...`);
+    try {
+      await metricsService.logJobExecution({
+        workspace_id,
+        job_id: job.id,
+        job_name: job.name,
+        trigger_url: url,
+        trigger_method: method,
+        status: 'success',
+        duration_ms: duration,
+        http_status: response.status,
+        retry_count: job.attemptsMade,
+      });
+      console.log(`[${workspace_id}] Metrics logged successfully`);
+    } catch (metricsError) {
+      console.error(`[${workspace_id}] Failed to log metrics:`, metricsError.message);
+    }
 
     return {
       success: true,

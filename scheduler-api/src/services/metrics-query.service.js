@@ -23,28 +23,23 @@ export class MetricsQueryService {
    */
   async getWorkspaceMetrics(workspaceId, limit = 100) {
     try {
-      // List recent metric files
+      // List recent metric files - search last 24 hours by hour
       const now = new Date();
-      const prefixes = [];
+      const allMetrics = [];
 
-      // Check last 7 days
-      for (let i = 0; i < 7; i++) {
-        const date = new Date(now);
-        date.setDate(date.getDate() - i);
+      // Search each hour for the last 24 hours
+      for (let h = 0; h < 24; h++) {
+        const date = new Date(now.getTime() - h * 60 * 60 * 1000);
         const year = date.getUTCFullYear();
         const month = String(date.getUTCMonth() + 1).padStart(2, '0');
         const day = String(date.getUTCDate()).padStart(2, '0');
-        prefixes.push(`metrics/year=${year}/month=${month}/day=${day}/`);
-      }
+        const hour = String(date.getUTCHours()).padStart(2, '0');
+        const prefix = `metrics/year=${year}/month=${month}/day=${day}/hour=${hour}/`;
 
-      const allMetrics = [];
-
-      // Fetch metrics from each prefix
-      for (const prefix of prefixes) {
         const listCommand = new ListObjectsV2Command({
           Bucket: this.bucket,
           Prefix: prefix,
-          MaxKeys: 50,
+          MaxKeys: 20,
         });
 
         const listResult = await this.s3Client.send(listCommand);
@@ -55,23 +50,27 @@ export class MetricsQueryService {
 
         // Sort by last modified descending
         const files = listResult.Contents.sort((a, b) =>
-          b.LastModified - a.LastModified
-        ).slice(0, 10); // Get last 10 files per day
+          new Date(b.LastModified) - new Date(a.LastModified)
+        ).slice(0, 10);
 
         // Fetch and parse each file
         for (const file of files) {
-          const getCommand = new GetObjectCommand({
-            Bucket: this.bucket,
-            Key: file.Key,
-          });
+          try {
+            const getCommand = new GetObjectCommand({
+              Bucket: this.bucket,
+              Key: file.Key,
+            });
 
-          const result = await this.s3Client.send(getCommand);
-          const body = await result.Body.transformToString();
-          const metrics = JSON.parse(body);
+            const result = await this.s3Client.send(getCommand);
+            const body = await result.Body.transformToString();
+            const metrics = JSON.parse(body);
 
-          // Filter by workspace_id
-          const workspaceMetrics = metrics.filter(m => m.workspace_id === workspaceId);
-          allMetrics.push(...workspaceMetrics);
+            // Filter by workspace_id
+            const workspaceMetrics = metrics.filter(m => m.workspace_id === workspaceId);
+            allMetrics.push(...workspaceMetrics);
+          } catch (e) {
+            // Skip files that can't be read
+          }
         }
 
         // If we have enough metrics, stop searching

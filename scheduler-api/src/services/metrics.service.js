@@ -30,6 +30,8 @@ export class MetricsService {
    * Log a job execution result
    */
   async logJobExecution(data) {
+    console.log(`📝 Logging metric for workspace: ${data.workspace_id}, job: ${data.job_name}`);
+
     const metric = {
       timestamp: new Date().toISOString(),
       workspace_id: data.workspace_id,
@@ -45,6 +47,7 @@ export class MetricsService {
     };
 
     this.metricsBuffer.push(metric);
+    console.log(`📝 Buffer size now: ${this.metricsBuffer.length}, workspaces in buffer: ${[...new Set(this.metricsBuffer.map(m => m.workspace_id))].join(', ')}`);
 
     // Flush if buffer is full
     if (this.metricsBuffer.length >= this.bufferSize) {
