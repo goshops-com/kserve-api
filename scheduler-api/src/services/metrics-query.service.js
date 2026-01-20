@@ -23,12 +23,12 @@ export class MetricsQueryService {
    */
   async getWorkspaceMetrics(workspaceId, limit = 100) {
     try {
-      // List recent metric files - search last 24 hours by hour
+      // List recent metric files - search last 7 days by hour
       const now = new Date();
       const allMetrics = [];
 
-      // Search each hour for the last 24 hours
-      for (let h = 0; h < 24; h++) {
+      // Search each hour for the last 7 days (168 hours)
+      for (let h = 0; h < 168; h++) {
         const date = new Date(now.getTime() - h * 60 * 60 * 1000);
         const year = date.getUTCFullYear();
         const month = String(date.getUTCMonth() + 1).padStart(2, '0');
