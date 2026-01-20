@@ -393,6 +393,34 @@
             display: block;
         }
 
+        /* Loading Spinner */
+        .loading {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 80px 20px;
+        }
+
+        .spinner {
+            width: 48px;
+            height: 48px;
+            border: 4px solid hsl(var(--border));
+            border-top-color: #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .loading-text {
+            margin-top: 16px;
+            color: hsl(var(--muted-foreground));
+            font-size: 14px;
+        }
+
         /* Responsive */
         @media (max-width: 768px) {
             .hero h1 {
@@ -443,6 +471,12 @@
 
         <!-- Error Banner -->
         <div id="error" class="error-banner" style="display:none;"></div>
+
+        <!-- Loading -->
+        <div id="loading" class="loading" style="display:none;">
+            <div class="spinner"></div>
+            <div class="loading-text">Loading metrics...</div>
+        </div>
 
         <!-- Results -->
         <div id="results">
@@ -597,10 +631,13 @@
         async function loadMetrics(workspaceId) {
             hideError();
             document.getElementById('results').classList.remove('show');
+            document.getElementById('loading').style.display = 'flex';
 
             try {
                 const response = await fetch(`/metrics/api/${workspaceId}`);
                 const data = await response.json();
+
+                document.getElementById('loading').style.display = 'none';
 
                 if (!response.ok) {
                     throw new Error(data.error || 'Failed to load metrics');
@@ -613,6 +650,7 @@
 
                 displayMetrics(data);
             } catch (error) {
+                document.getElementById('loading').style.display = 'none';
                 showError(error.message);
             }
         }
