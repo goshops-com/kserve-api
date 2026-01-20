@@ -28,52 +28,26 @@ export class MetricsQueryService {
       const allMetrics = [];
 
       // Search each hour for the last 7 days (168 hours)
-      for (let h = 0; h < 168; h++) {
-        const date = new Date(now.getTime() - h * 60 * 60 * 1000);
-        const year = date.getUTCFullYear();
-        const month = String(date.getUTCMonth() + 1).padStart(2, '0');
-        const day = String(date.getUTCDate()).padStart(2, '0');
-        const hour = String(date.getUTCHours()).padStart(2, '0');
-        const prefix = `metrics/year=${year}/month=${month}/day=${day}/hour=${hour}/`;
+      // Process in parallel batches for speed
+      const BATCH_SIZE = 12; // Process 12 hours at a time
 
-        const listCommand = new ListObjectsV2Command({
-          Bucket: this.bucket,
-          Prefix: prefix,
-          MaxKeys: 20,
-        });
+      for (let batchStart = 0; batchStart < 168 && allMetrics.length < limit; batchStart += BATCH_SIZE) {
+        const batchPromises = [];
 
-        const listResult = await this.s3Client.send(listCommand);
+        for (let h = batchStart; h < Math.min(batchStart + BATCH_SIZE, 168); h++) {
+          const date = new Date(now.getTime() - h * 60 * 60 * 1000);
+          const year = date.getUTCFullYear();
+          const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+          const day = String(date.getUTCDate()).padStart(2, '0');
+          const hour = String(date.getUTCHours()).padStart(2, '0');
+          const prefix = `metrics/year=${year}/month=${month}/day=${day}/hour=${hour}/`;
 
-        if (!listResult.Contents || listResult.Contents.length === 0) {
-          continue;
+          batchPromises.push(this.fetchHourMetrics(prefix, workspaceId));
         }
 
-        // Read all files returned (don't skip any - metrics could be in any file)
-        const files = listResult.Contents;
-
-        // Fetch and parse each file
-        for (const file of files) {
-          try {
-            const getCommand = new GetObjectCommand({
-              Bucket: this.bucket,
-              Key: file.Key,
-            });
-
-            const result = await this.s3Client.send(getCommand);
-            const body = await result.Body.transformToString();
-            const metrics = JSON.parse(body);
-
-            // Filter by workspace_id
-            const workspaceMetrics = metrics.filter(m => m.workspace_id === workspaceId);
-            allMetrics.push(...workspaceMetrics);
-          } catch (e) {
-            // Skip files that can't be read
-          }
-        }
-
-        // If we have enough metrics, stop searching
-        if (allMetrics.length >= limit) {
-          break;
+        const batchResults = await Promise.all(batchPromises);
+        for (const metrics of batchResults) {
+          allMetrics.push(...metrics);
         }
       }
 
@@ -95,6 +69,50 @@ export class MetricsQueryService {
       console.error('Error fetching metrics:', error);
       throw error;
     }
+  }
+
+  /**
+   * Fetch metrics for a specific hour prefix
+   */
+  async fetchHourMetrics(prefix, workspaceId) {
+    const hourMetrics = [];
+    try {
+      const listCommand = new ListObjectsV2Command({
+        Bucket: this.bucket,
+        Prefix: prefix,
+        MaxKeys: 10, // Limit files per hour
+      });
+
+      const listResult = await this.s3Client.send(listCommand);
+
+      if (!listResult.Contents || listResult.Contents.length === 0) {
+        return hourMetrics;
+      }
+
+      // Read files in parallel
+      const filePromises = listResult.Contents.map(async (file) => {
+        try {
+          const getCommand = new GetObjectCommand({
+            Bucket: this.bucket,
+            Key: file.Key,
+          });
+          const result = await this.s3Client.send(getCommand);
+          const body = await result.Body.transformToString();
+          const metrics = JSON.parse(body);
+          return metrics.filter(m => m.workspace_id === workspaceId);
+        } catch (e) {
+          return [];
+        }
+      });
+
+      const results = await Promise.all(filePromises);
+      for (const metrics of results) {
+        hourMetrics.push(...metrics);
+      }
+    } catch (e) {
+      // Skip hours that can't be read
+    }
+    return hourMetrics;
   }
 
   /**
