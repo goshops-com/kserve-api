@@ -54,9 +54,9 @@ class DeploymentRequest(BaseModel):
 
 MACHINE_SIZES = {
     "sm": {"cpu_request": "100m",  "cpu_limit": "0.5",  "memory_request": "128Mi", "memory_limit": "512Mi"},
-    "md": {"cpu_request": "250m",  "cpu_limit": "1",    "memory_request": "256Mi", "memory_limit": "1Gi"},
-    "lg": {"cpu_request": "500m",  "cpu_limit": "2",    "memory_request": "512Mi", "memory_limit": "2Gi"},
-    "xl": {"cpu_request": "1000m", "cpu_limit": "4",    "memory_request": "1Gi",   "memory_limit": "4Gi"},
+    "md": {"cpu_request": "200m",  "cpu_limit": "1",    "memory_request": "256Mi", "memory_limit": "1Gi"},
+    "lg": {"cpu_request": "250m",  "cpu_limit": "1",    "memory_request": "512Mi", "memory_limit": "2Gi"},
+    "xl": {"cpu_request": "500m",  "cpu_limit": "2",    "memory_request": "1Gi",   "memory_limit": "4Gi"},
 }
 
 
