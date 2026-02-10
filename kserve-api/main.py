@@ -48,6 +48,16 @@ class DeploymentRequest(BaseModel):
     envs: Optional[Dict[str, str]] = {}
     namespace: Optional[str] = DEFAULT_NAMESPACE
     custom_domain: Optional[str] = None  # Optional custom domain (e.g., "myapp.example.com")
+    idle_timeout: Optional[int] = None  # Seconds before scale-to-zero (None = Knative default ~60s)
+    size: Optional[str] = "sm"  # Machine size: sm, md, lg, xl
+
+
+MACHINE_SIZES = {
+    "sm": {"cpu_request": "100m",  "cpu_limit": "0.5",  "memory_request": "128Mi", "memory_limit": "512Mi"},
+    "md": {"cpu_request": "250m",  "cpu_limit": "1",    "memory_request": "256Mi", "memory_limit": "1Gi"},
+    "lg": {"cpu_request": "500m",  "cpu_limit": "2",    "memory_request": "512Mi", "memory_limit": "2Gi"},
+    "xl": {"cpu_request": "1000m", "cpu_limit": "4",    "memory_request": "1Gi",   "memory_limit": "4Gi"},
+}
 
 
 class DeploymentResponse(BaseModel):
@@ -58,7 +68,7 @@ class DeploymentResponse(BaseModel):
     url: Optional[str] = None
 
 
-def create_knative_service_spec(name: str, image: str, envs: Dict[str, str]) -> dict:
+def create_knative_service_spec(name: str, image: str, envs: Dict[str, str], idle_timeout: int = None, size: str = "sm") -> dict:
     """Create Knative Service spec for customer app deployment"""
 
     # Convert envs dict to list of env vars
@@ -67,6 +77,9 @@ def create_knative_service_spec(name: str, image: str, envs: Dict[str, str]) -> 
     # Auto-inject service URL for self-ping keep-alive pattern
     service_url = f"https://{name}.{DOMAIN}"
     env_list.append({"name": "SERVICE_URL", "value": service_url})
+
+    # Resolve machine size
+    resources = MACHINE_SIZES.get(size, MACHINE_SIZES["sm"])
 
     return {
         "apiVersion": f"{KNATIVE_GROUP}/{KNATIVE_VERSION}",
@@ -84,7 +97,8 @@ def create_knative_service_spec(name: str, image: str, envs: Dict[str, str]) -> 
                     "annotations": {
                         "autoscaling.knative.dev/min-scale": "0",
                         "autoscaling.knative.dev/max-scale": "10",
-                        "autoscaling.knative.dev/target": "100"
+                        "autoscaling.knative.dev/target": "100",
+                        **({"autoscaling.knative.dev/scale-to-zero-pod-retention-period": f"{idle_timeout}s"} if idle_timeout is not None else {})
                     }
                 },
                 "spec": {
@@ -97,12 +111,12 @@ def create_knative_service_spec(name: str, image: str, envs: Dict[str, str]) -> 
                         }],
                         "resources": {
                             "requests": {
-                                "cpu": "100m",
-                                "memory": "128Mi"
+                                "cpu": resources["cpu_request"],
+                                "memory": resources["memory_request"]
                             },
                             "limits": {
-                                "cpu": "1",
-                                "memory": "512Mi"
+                                "cpu": resources["cpu_limit"],
+                                "memory": resources["memory_limit"]
                             }
                         }
                     }]
@@ -788,7 +802,9 @@ async def deploy_app(request: DeploymentRequest):
         knative_service = create_knative_service_spec(
             name=name,
             image=request.image,
-            envs=request.envs
+            envs=request.envs,
+            idle_timeout=request.idle_timeout,
+            size=request.size
         )
 
         if existing is None:
