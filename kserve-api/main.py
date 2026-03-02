@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Dict, Optional
 from kubernetes import client, config
@@ -1034,6 +1035,56 @@ async def get_logs(name: str, namespace: str = DEFAULT_NAMESPACE, tail_lines: in
     except Exception as e:
         logger.error(f"Unexpected error fetching logs: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/logs/{name}/stream")
+async def stream_logs(name: str, namespace: str = DEFAULT_NAMESPACE, tail_lines: int = 50):
+    """
+    Stream logs from an app in real-time via Server-Sent Events.
+    """
+    # Check if Knative Service exists
+    existing = get_knative_service(name, namespace)
+    if existing is None:
+        raise HTTPException(status_code=404, detail=f"App {name} not found in namespace {namespace}")
+
+    # Find pods for this Knative Service
+    label_selector = f"serving.knative.dev/service={name}"
+    pods = core_v1.list_namespaced_pod(
+        namespace=namespace,
+        label_selector=label_selector
+    )
+
+    if not pods.items:
+        raise HTTPException(status_code=404, detail=f"No pods found for {name}. App may be scaled to zero.")
+
+    latest_pod = max(pods.items, key=lambda p: p.metadata.creation_timestamp)
+    pod_name = latest_pod.metadata.name
+
+    def log_generator():
+        try:
+            stream = core_v1.read_namespaced_pod_log(
+                name=pod_name,
+                namespace=namespace,
+                follow=True,
+                tail_lines=tail_lines,
+                _preload_content=False
+            )
+            for line in stream:
+                if isinstance(line, bytes):
+                    line = line.decode("utf-8")
+                yield f"data: {line}\n\n"
+        except Exception as e:
+            yield f"data: [error] {str(e)}\n\n"
+
+    return StreamingResponse(
+        log_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        }
+    )
 
 
 if __name__ == "__main__":
