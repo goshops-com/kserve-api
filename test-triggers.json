@@ -1,0 +1,24 @@
+{
+  "triggers": [
+    {
+      "cron": "*/5 * * * *",
+      "url": "https://httpbin.org/post",
+      "method": "POST",
+      "payload": {
+        "test": "data",
+        "workspace_id": "test-workspace-123"
+      },
+      "headers": {
+        "Content-Type": "application/json"
+      }
+    },
+    {
+      "cron": "*/10 * * * *",
+      "url": "https://httpbin.org/get",
+      "method": "GET",
+      "headers": {
+        "X-Test-Header": "scheduler-test"
+      }
+    }
+  ]
+}

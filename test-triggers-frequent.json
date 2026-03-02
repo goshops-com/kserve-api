@@ -1,0 +1,18 @@
+{
+  "triggers": [
+    {
+      "cron": "* * * * *",
+      "url": "https://httpbin.org/post",
+      "method": "POST",
+      "payload": {
+        "test": "every minute test",
+        "workspace_id": "test-workspace-456",
+        "timestamp": "auto"
+      },
+      "headers": {
+        "Content-Type": "application/json",
+        "X-Test": "scheduler-every-minute"
+      }
+    }
+  ]
+}
