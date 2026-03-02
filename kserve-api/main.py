@@ -1065,6 +1065,7 @@ async def stream_logs(name: str, namespace: str = DEFAULT_NAMESPACE, tail_lines:
             stream = core_v1.read_namespaced_pod_log(
                 name=pod_name,
                 namespace=namespace,
+                container="user-container",
                 follow=True,
                 tail_lines=tail_lines,
                 _preload_content=False
