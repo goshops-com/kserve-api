@@ -1002,6 +1002,7 @@ async def get_logs(name: str, namespace: str = DEFAULT_NAMESPACE, tail_lines: in
                 logs = core_v1.read_namespaced_pod_log(
                     name=pod_name,
                     namespace=namespace,
+                    container="user-container",
                     tail_lines=tail_lines
                 )
             except ApiException:
@@ -1018,6 +1019,7 @@ async def get_logs(name: str, namespace: str = DEFAULT_NAMESPACE, tail_lines: in
             logs = core_v1.read_namespaced_pod_log(
                 name=pod_name,
                 namespace=namespace,
+                container="user-container",
                 tail_lines=tail_lines
             )
 
