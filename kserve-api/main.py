@@ -98,7 +98,7 @@ def create_knative_service_spec(name: str, image: str, envs: Dict[str, str], idl
                     "annotations": {
                         "autoscaling.knative.dev/min-scale": "0",
                         "autoscaling.knative.dev/max-scale": "10",
-                        "autoscaling.knative.dev/target": "100",
+                        "autoscaling.knative.dev/target": "250",
                         **({"autoscaling.knative.dev/scale-to-zero-pod-retention-period": f"{idle_timeout}s"} if idle_timeout is not None else {})
                     }
                 },
