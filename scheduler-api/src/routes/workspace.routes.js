@@ -6,7 +6,7 @@ const workspaceService = new WorkspaceService();
 
 /**
  * POST /api/workspaces/:workspace_id/triggers
- * Body: { triggers: [...], environment: "dev"|"staging"|"prod" }
+ * Body: { triggers: [...], environment: "dev"|"stg"|"prod" }
  */
 router.post('/:workspace_id/triggers', async (req, res) => {
   try {

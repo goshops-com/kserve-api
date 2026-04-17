@@ -4,11 +4,22 @@ import { triggerQueue } from '../queue/trigger.queue.js';
  * Service for managing workspace triggers
  */
 export class WorkspaceService {
+  static VALID_ENVS = ['dev', 'stg', 'prod'];
+
   /**
    * Build job prefix for a workspace + environment
    */
   jobPrefix(workspace_id, environment) {
     return `${workspace_id}-${environment}`;
+  }
+
+  /**
+   * Validate environment value
+   */
+  validateEnvironment(environment) {
+    if (!WorkspaceService.VALID_ENVS.includes(environment)) {
+      throw new Error(`Invalid environment: ${environment}. Must be one of: ${WorkspaceService.VALID_ENVS.join(', ')}`);
+    }
   }
 
   /**
@@ -22,6 +33,8 @@ export class WorkspaceService {
     if (!Array.isArray(triggers)) {
       throw new Error('triggers must be an array');
     }
+
+    this.validateEnvironment(environment);
 
     for (const trigger of triggers) {
       this.validateTrigger(trigger);
