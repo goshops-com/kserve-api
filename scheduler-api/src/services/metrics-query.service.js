@@ -22,7 +22,7 @@ export class MetricsQueryService {
   /**
    * Get latest metrics for a workspace
    */
-  async getWorkspaceMetrics(workspaceId, limit = 100) {
+  async getWorkspaceMetrics(workspaceId, limit = 100, environment = null) {
     try {
       const now = new Date();
       const allMetrics = [];
@@ -55,9 +55,14 @@ export class MetricsQueryService {
         }
       }
 
+      // Filter by environment if specified
+      const envFiltered = environment
+        ? allMetrics.filter(m => m.environment === environment)
+        : allMetrics;
+
       // Dedupe by timestamp + job_id
       const seen = new Set();
-      const uniqueMetrics = allMetrics.filter(m => {
+      const uniqueMetrics = envFiltered.filter(m => {
         const key = `${m.timestamp}-${m.job_id}`;
         if (seen.has(key)) return false;
         seen.add(key);

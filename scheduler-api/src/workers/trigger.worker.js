@@ -8,7 +8,7 @@ import { metricsService } from '../services/metrics.service.js';
  * @param {Object} job - BullMQ job object
  */
 async function executeTrigger(job) {
-  const { workspace_id, trigger } = job.data;
+  const { workspace_id, environment = 'dev', trigger } = job.data;
   const { url, method, payload, headers } = trigger;
   const startTime = Date.now();
 
@@ -32,6 +32,7 @@ async function executeTrigger(job) {
     try {
       await metricsService.logJobExecution({
         workspace_id,
+        environment,
         job_id: job.id,
         job_name: job.name,
         trigger_url: url,
@@ -60,6 +61,7 @@ async function executeTrigger(job) {
     // Log metrics for failure
     await metricsService.logJobExecution({
       workspace_id,
+      environment,
       job_id: job.id,
       job_name: job.name,
       trigger_url: url,

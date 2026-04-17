@@ -6,12 +6,12 @@ const workspaceService = new WorkspaceService();
 
 /**
  * POST /api/workspaces/:workspace_id/triggers
- * Update triggers for a workspace
+ * Body: { triggers: [...], environment: "dev"|"staging"|"prod" }
  */
 router.post('/:workspace_id/triggers', async (req, res) => {
   try {
     const { workspace_id } = req.params;
-    const { triggers } = req.body;
+    const { triggers, environment = 'dev' } = req.body;
 
     if (!triggers) {
       return res.status(400).json({
@@ -20,7 +20,7 @@ router.post('/:workspace_id/triggers', async (req, res) => {
       });
     }
 
-    const result = await workspaceService.updateWorkspaceTriggers(workspace_id, triggers);
+    const result = await workspaceService.updateWorkspaceTriggers(workspace_id, triggers, environment);
 
     res.status(200).json(result);
   } catch (error) {
@@ -34,18 +34,19 @@ router.post('/:workspace_id/triggers', async (req, res) => {
 });
 
 /**
- * GET /api/workspaces/:workspace_id/triggers
- * Get all triggers for a workspace
+ * GET /api/workspaces/:workspace_id/triggers?environment=dev
  */
 router.get('/:workspace_id/triggers', async (req, res) => {
   try {
     const { workspace_id } = req.params;
+    const { environment } = req.query;
 
-    const jobs = await workspaceService.getWorkspaceJobs(workspace_id);
+    const jobs = await workspaceService.getWorkspaceJobs(workspace_id, environment || null);
 
     res.status(200).json({
       success: true,
       workspace_id,
+      environment: environment || 'all',
       count: jobs.length,
       jobs,
     });
@@ -60,18 +61,19 @@ router.get('/:workspace_id/triggers', async (req, res) => {
 });
 
 /**
- * DELETE /api/workspaces/:workspace_id/triggers
- * Remove all triggers for a workspace
+ * DELETE /api/workspaces/:workspace_id/triggers?environment=dev
  */
 router.delete('/:workspace_id/triggers', async (req, res) => {
   try {
     const { workspace_id } = req.params;
+    const { environment = 'dev' } = req.query;
 
-    const removedCount = await workspaceService.removeWorkspaceJobs(workspace_id);
+    const removedCount = await workspaceService.removeWorkspaceJobs(workspace_id, environment);
 
     res.status(200).json({
       success: true,
       workspace_id,
+      environment,
       removed: removedCount,
     });
   } catch (error) {

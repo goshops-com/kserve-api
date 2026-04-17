@@ -5,13 +5,16 @@ import { triggerQueue } from '../queue/trigger.queue.js';
  */
 export class WorkspaceService {
   /**
-   * Update triggers for a workspace
-   * Removes all existing jobs and creates new ones based on the provided triggers
-   * @param {string} workspace_id - Workspace identifier
-   * @param {Array} triggers - Array of trigger configurations
-   * @returns {Promise<Object>} Result of the operation
+   * Build job prefix for a workspace + environment
    */
-  async updateWorkspaceTriggers(workspace_id, triggers) {
+  jobPrefix(workspace_id, environment) {
+    return `${workspace_id}-${environment}`;
+  }
+
+  /**
+   * Update triggers for a workspace
+   */
+  async updateWorkspaceTriggers(workspace_id, triggers, environment = 'dev') {
     if (!workspace_id) {
       throw new Error('workspace_id is required');
     }
@@ -20,47 +23,48 @@ export class WorkspaceService {
       throw new Error('triggers must be an array');
     }
 
-    // Validate triggers
     for (const trigger of triggers) {
       this.validateTrigger(trigger);
     }
 
     try {
-      // Step 1: Remove all existing jobs for this workspace
-      const removedCount = await this.removeWorkspaceJobs(workspace_id);
+      // Step 1: Remove existing jobs for this workspace + environment only
+      const removedCount = await this.removeWorkspaceJobs(workspace_id, environment);
 
-      console.log(`Removed ${removedCount} existing jobs for workspace ${workspace_id}`);
+      console.log(`Removed ${removedCount} existing jobs for workspace ${workspace_id} env=${environment}`);
 
       // Step 2: Add new jobs
+      const prefix = this.jobPrefix(workspace_id, environment);
       const addedJobs = [];
 
       for (let i = 0; i < triggers.length; i++) {
         const trigger = triggers[i];
-        const jobName = `${workspace_id}-trigger-${i}`;
+        const jobName = `${prefix}-trigger-${i}`;
 
         const job = await triggerQueue.add(
           jobName,
           {
             workspace_id,
+            environment,
             trigger,
           },
           {
             repeat: {
               pattern: trigger.cron,
             },
-            jobId: `${workspace_id}:${i}`, // Unique job ID
+            jobId: `${workspace_id}:${environment}:${i}`,
             attempts: 3,
             backoff: {
               type: 'exponential',
-              delay: 2000, // Start with 2 seconds
+              delay: 2000,
             },
             removeOnComplete: {
-              age: 3600, // Keep completed jobs for 1 hour
-              count: 100, // Keep last 100 completed jobs
+              age: 3600,
+              count: 100,
             },
             removeOnFail: {
-              age: 86400, // Keep failed jobs for 24 hours
-              count: 1000, // Keep last 1000 failed jobs
+              age: 86400,
+              count: 1000,
             },
           }
         );
@@ -68,6 +72,7 @@ export class WorkspaceService {
         addedJobs.push({
           jobId: job.id,
           jobName: job.name,
+          environment,
           cron: trigger.cron,
           url: trigger.url,
           method: trigger.method,
@@ -77,6 +82,7 @@ export class WorkspaceService {
       return {
         success: true,
         workspace_id,
+        environment,
         removed: removedCount,
         added: addedJobs.length,
         jobs: addedJobs,
@@ -88,21 +94,17 @@ export class WorkspaceService {
   }
 
   /**
-   * Remove all jobs for a specific workspace
-   * @param {string} workspace_id - Workspace identifier
-   * @returns {Promise<number>} Number of jobs removed
+   * Remove jobs for a specific workspace + environment
    */
-  async removeWorkspaceJobs(workspace_id) {
+  async removeWorkspaceJobs(workspace_id, environment = 'dev') {
     try {
-      // Get all repeatable jobs
       const repeatableJobs = await triggerQueue.getRepeatableJobs();
+      const prefix = this.jobPrefix(workspace_id, environment);
 
       let removedCount = 0;
 
-      // Filter and remove jobs for this workspace
       for (const job of repeatableJobs) {
-        // Check if job name contains workspace_id
-        if (job.name && job.name.includes(workspace_id)) {
+        if (job.name && job.name.startsWith(prefix)) {
           await triggerQueue.removeRepeatableByKey(job.key);
           removedCount++;
         }
@@ -117,7 +119,6 @@ export class WorkspaceService {
 
   /**
    * Validate trigger configuration
-   * @param {Object} trigger - Trigger configuration
    */
   validateTrigger(trigger) {
     if (!trigger.cron) {
@@ -137,7 +138,6 @@ export class WorkspaceService {
       throw new Error(`Invalid HTTP method: ${trigger.method}. Must be one of: ${validMethods.join(', ')}`);
     }
 
-    // Validate URL format
     try {
       new URL(trigger.url);
     } catch (error) {
@@ -146,13 +146,17 @@ export class WorkspaceService {
   }
 
   /**
-   * Get all jobs for a workspace
-   * @param {string} workspace_id - Workspace identifier
-   * @returns {Promise<Array>} Array of jobs
+   * Get jobs for a workspace, optionally filtered by environment
    */
-  async getWorkspaceJobs(workspace_id) {
+  async getWorkspaceJobs(workspace_id, environment = null) {
     const repeatableJobs = await triggerQueue.getRepeatableJobs();
 
+    if (environment) {
+      const prefix = this.jobPrefix(workspace_id, environment);
+      return repeatableJobs.filter(job => job.name && job.name.startsWith(prefix));
+    }
+
+    // No environment filter: return all jobs for this workspace
     return repeatableJobs.filter(job => job.name && job.name.includes(workspace_id));
   }
 }

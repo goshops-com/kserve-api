@@ -452,6 +452,12 @@
                     <span>CalvinCode</span>
                 </a>
                 <div class="nav-actions">
+                    <select id="envFilter" onchange="onEnvChange()" style="padding: 8px 12px; border-radius: 6px; border: 1px solid hsl(var(--border)); background: hsl(var(--background)); color: hsl(var(--foreground)); font-size: 14px; font-family: inherit; cursor: pointer;">
+                        <option value="">All environments</option>
+                        <option value="dev">dev</option>
+                        <option value="staging">staging</option>
+                        <option value="prod">prod</option>
+                    </select>
                     <button class="theme-toggle" onclick="toggleTheme()">
                         <span id="themeIcon">🌙</span>
                         <span id="themeText">Dark</span>
@@ -613,14 +619,28 @@
             }
         }
 
+        let currentWorkspaceId = null;
+
+        function onEnvChange() {
+            if (currentWorkspaceId) {
+                loadMetrics(currentWorkspaceId);
+            }
+        }
+
         // Load metrics on page load
         window.addEventListener('DOMContentLoaded', () => {
             loadTheme();
 
             const urlParams = new URLSearchParams(window.location.search);
             const workspaceId = urlParams.get('workspace_id');
+            const env = urlParams.get('environment');
+
+            if (env) {
+                document.getElementById('envFilter').value = env;
+            }
 
             if (workspaceId) {
+                currentWorkspaceId = workspaceId;
                 document.getElementById('workspaceDisplay').textContent = workspaceId;
                 loadMetrics(workspaceId);
             } else {
@@ -634,7 +654,9 @@
             document.getElementById('loading').style.display = 'flex';
 
             try {
-                const response = await fetch(`/metrics/api/${workspaceId}`);
+                const env = document.getElementById('envFilter').value;
+                const envParam = env ? `&environment=${env}` : '';
+                const response = await fetch(`/metrics/api/${workspaceId}?limit=100${envParam}`);
                 const data = await response.json();
 
                 document.getElementById('loading').style.display = 'none';

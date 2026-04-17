@@ -24,8 +24,9 @@ router.get('/api/:workspace_id', async (req, res) => {
   try {
     const { workspace_id } = req.params;
     const limit = parseInt(req.query.limit) || 100;
+    const environment = req.query.environment || null;
 
-    const metrics = await metricsQueryService.getWorkspaceMetrics(workspace_id, limit);
+    const metrics = await metricsQueryService.getWorkspaceMetrics(workspace_id, limit, environment);
 
     // Get next scheduled execution time
     let nextExecution = null;
