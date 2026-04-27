@@ -61,25 +61,31 @@ router.get('/:workspace_id/triggers', async (req, res) => {
 });
 
 /**
- * DELETE /api/workspaces/:workspace_id/triggers?environment=dev
+ * DELETE /api/workspaces/:workspace_id/triggers
+ *   - no query param  -> removes ALL jobs for the workspace (any env, including legacy)
+ *   - ?environment=dev -> removes only that env (legacy jobs count as dev)
  */
 router.delete('/:workspace_id/triggers', async (req, res) => {
   try {
     const { workspace_id } = req.params;
-    const { environment = 'dev' } = req.query;
+    const { environment } = req.query;
 
-    const removedCount = await workspaceService.removeWorkspaceJobs(workspace_id, environment);
+    if (environment) {
+      workspaceService.validateEnvironment(environment);
+    }
+
+    const removedCount = await workspaceService.removeWorkspaceJobs(workspace_id, environment || null);
 
     res.status(200).json({
       success: true,
       workspace_id,
-      environment,
+      environment: environment || 'all',
       removed: removedCount,
     });
   } catch (error) {
     console.error('Error removing workspace triggers:', error);
 
-    res.status(500).json({
+    res.status(400).json({
       success: false,
       error: error.message,
     });

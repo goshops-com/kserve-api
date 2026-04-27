@@ -107,17 +107,48 @@ export class WorkspaceService {
   }
 
   /**
-   * Remove jobs for a specific workspace + environment
+   * Check if a job name matches a workspace + environment
+   * Treats legacy jobs (without env) as 'dev'
    */
-  async removeWorkspaceJobs(workspace_id, environment = 'dev') {
+  jobMatches(jobName, workspace_id, environment) {
+    if (!jobName) return false;
+
+    const newPrefix = `${workspace_id}-${environment}-trigger-`;
+    if (jobName.startsWith(newPrefix)) return true;
+
+    // Legacy jobs (no env in name): "{workspace_id}-trigger-N" - treat as dev
+    if (environment === 'dev') {
+      const legacyPrefix = `${workspace_id}-trigger-`;
+      if (jobName.startsWith(legacyPrefix)) return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Remove jobs for a workspace.
+   * If environment is null/undefined -> removes ALL jobs for that workspace (any env, incl. legacy)
+   * If environment is set -> removes only jobs of that env (legacy jobs counted as dev)
+   */
+  async removeWorkspaceJobs(workspace_id, environment = null) {
     try {
       const repeatableJobs = await triggerQueue.getRepeatableJobs();
-      const prefix = this.jobPrefix(workspace_id, environment);
 
       let removedCount = 0;
 
       for (const job of repeatableJobs) {
-        if (job.name && job.name.startsWith(prefix)) {
+        if (!job.name) continue;
+
+        let shouldRemove = false;
+
+        if (!environment) {
+          // No env filter: remove every job containing this workspace_id
+          shouldRemove = job.name.includes(workspace_id);
+        } else {
+          shouldRemove = this.jobMatches(job.name, workspace_id, environment);
+        }
+
+        if (shouldRemove) {
           await triggerQueue.removeRepeatableByKey(job.key);
           removedCount++;
         }
