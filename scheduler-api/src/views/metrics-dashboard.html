@@ -410,6 +410,105 @@
             flex-wrap: wrap;
         }
 
+        /* Modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+        }
+
+        .modal-overlay.show { display: flex; }
+
+        .modal {
+            background-color: hsl(var(--card));
+            border: 1px solid hsl(var(--border));
+            border-radius: var(--radius);
+            max-width: 720px;
+            width: 100%;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+
+        .modal-header {
+            padding: 24px;
+            border-bottom: 1px solid hsl(var(--border));
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-body {
+            padding: 24px;
+        }
+
+        .modal-close {
+            background: transparent;
+            border: none;
+            color: hsl(var(--muted-foreground));
+            font-size: 20px;
+            cursor: pointer;
+            padding: 0;
+            line-height: 1;
+            font-family: inherit;
+        }
+
+        .modal-close:hover { color: hsl(var(--foreground)); }
+
+        .detail-row {
+            margin-bottom: 16px;
+        }
+
+        .detail-label {
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: hsl(var(--muted-foreground));
+            margin-bottom: 4px;
+        }
+
+        .detail-value {
+            font-size: 14px;
+            color: hsl(var(--foreground));
+            word-break: break-all;
+        }
+
+        .detail-value.mono {
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 13px;
+        }
+
+        .detail-code {
+            background: hsl(var(--muted));
+            padding: 12px;
+            border-radius: calc(var(--radius) - 2px);
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+            word-break: break-all;
+            max-height: 240px;
+            overflow-y: auto;
+        }
+
+        .link-button {
+            background: transparent;
+            border: none;
+            color: hsl(var(--foreground));
+            text-decoration: underline;
+            cursor: pointer;
+            font-family: inherit;
+            font-size: inherit;
+            padding: 0;
+            text-align: left;
+        }
+
+        .link-button:hover { color: hsl(var(--muted-foreground)); }
+
         /* Responsive */
         @media (max-width: 768px) {
             .hero h1 { font-size: 1.5rem; }
@@ -530,6 +629,16 @@
                         </thead>
                         <tbody id="tableBody"></tbody>
                     </table>
+                </div>
+            </div>
+
+            <div id="jobModal" class="modal-overlay" onclick="closeJobModal(event)">
+                <div class="modal" onclick="event.stopPropagation()">
+                    <div class="modal-header">
+                        <h2 class="section-title">Job Details</h2>
+                        <button class="modal-close" onclick="closeJobModal()">&times;</button>
+                    </div>
+                    <div class="modal-body" id="jobModalBody"></div>
                 </div>
             </div>
 
@@ -654,7 +763,10 @@
             }
         }
 
+        let jobsCache = [];
+
         function renderJobs(jobs) {
+            jobsCache = jobs;
             const tbody = document.getElementById('jobsTableBody');
             const countEl = document.getElementById('jobsCount');
 
@@ -666,19 +778,82 @@
                 return;
             }
 
-            jobs.forEach(job => {
-                const env = parseEnvFromJobName(job.name);
+            jobs.forEach((job, idx) => {
+                const env = job.environment || parseEnvFromJobName(job.name);
                 const nextRun = job.next ? new Date(job.next).toLocaleString() : '-';
                 const row = tbody.insertRow();
                 row.innerHTML = `
-                    <td class="mono">${escapeHtml(job.name)}</td>
+                    <td><button class="link-button mono" onclick="openJobModal(${idx})">${escapeHtml(job.name)}</button></td>
                     <td><span class="status-badge" style="background: hsl(var(--muted)); color: hsl(var(--foreground));">${env}</span></td>
-                    <td class="mono">${escapeHtml(job.pattern || job.cron || '-')}</td>
+                    <td class="mono">${escapeHtml(job.pattern || job.trigger?.cron || '-')}</td>
                     <td class="mono">${nextRun}</td>
                     <td><button class="btn btn-destructive btn-sm" onclick="deleteSingleJob('${job.key}')">Delete</button></td>
                 `;
             });
         }
+
+        function openJobModal(idx) {
+            const job = jobsCache[idx];
+            if (!job) return;
+
+            const env = job.environment || parseEnvFromJobName(job.name);
+            const t = job.trigger || {};
+            const headers = t.headers ? JSON.stringify(t.headers, null, 2) : null;
+            const payload = t.payload ? JSON.stringify(t.payload, null, 2) : null;
+
+            const html = `
+                <div class="detail-row">
+                    <div class="detail-label">Job Name</div>
+                    <div class="detail-value mono">${escapeHtml(job.name)}</div>
+                </div>
+                <div class="detail-row">
+                    <div class="detail-label">Environment</div>
+                    <div class="detail-value">${env}</div>
+                </div>
+                <div class="detail-row">
+                    <div class="detail-label">Cron</div>
+                    <div class="detail-value mono">${escapeHtml(job.pattern || t.cron || '-')}</div>
+                </div>
+                <div class="detail-row">
+                    <div class="detail-label">Next Run</div>
+                    <div class="detail-value mono">${job.next ? new Date(job.next).toLocaleString() : '-'}</div>
+                </div>
+                <div class="detail-row">
+                    <div class="detail-label">Method</div>
+                    <div class="detail-value mono">${escapeHtml(t.method || '-')}</div>
+                </div>
+                <div class="detail-row">
+                    <div class="detail-label">URL</div>
+                    <div class="detail-value mono">${escapeHtml(t.url || '-')}</div>
+                </div>
+                ${headers ? `
+                <div class="detail-row">
+                    <div class="detail-label">Headers</div>
+                    <div class="detail-code">${escapeHtml(headers)}</div>
+                </div>` : ''}
+                ${payload ? `
+                <div class="detail-row">
+                    <div class="detail-label">Payload</div>
+                    <div class="detail-code">${escapeHtml(payload)}</div>
+                </div>` : ''}
+                <div class="detail-row">
+                    <div class="detail-label">Job Key</div>
+                    <div class="detail-value mono" style="color: hsl(var(--muted-foreground)); font-size: 12px;">${escapeHtml(job.key)}</div>
+                </div>
+            `;
+
+            document.getElementById('jobModalBody').innerHTML = html;
+            document.getElementById('jobModal').classList.add('show');
+        }
+
+        function closeJobModal(e) {
+            if (e && e.target.id !== 'jobModal') return;
+            document.getElementById('jobModal').classList.remove('show');
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') closeJobModal();
+        });
 
         function parseEnvFromJobName(name) {
             // Format: {workspace_id}-{env}-trigger-{N} or legacy {workspace_id}-trigger-{N}

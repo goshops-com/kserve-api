@@ -207,17 +207,46 @@ export class WorkspaceService {
   }
 
   /**
-   * Get jobs for a workspace, optionally filtered by environment
+   * Get jobs for a workspace, optionally filtered by environment.
+   * Merges repeatable job metadata with the trigger data from delayed jobs.
    */
   async getWorkspaceJobs(workspace_id, environment = null) {
-    const repeatableJobs = await triggerQueue.getRepeatableJobs();
+    const [repeatableJobs, delayedJobs] = await Promise.all([
+      triggerQueue.getRepeatableJobs(),
+      triggerQueue.getDelayed(0, 500),
+    ]);
 
-    if (environment) {
-      const prefix = this.jobPrefix(workspace_id, environment);
-      return repeatableJobs.filter(job => job.name && job.name.startsWith(prefix));
+    // Build a lookup of delayed jobs by name for fast access to trigger data
+    const delayedByName = {};
+    for (const dj of delayedJobs) {
+      if (dj.name) delayedByName[dj.name] = dj;
     }
 
-    // No environment filter: return all jobs for this workspace
-    return repeatableJobs.filter(job => job.name && job.name.includes(workspace_id));
+    let filtered;
+    if (environment) {
+      filtered = repeatableJobs.filter(job => this.jobMatches(job.name, workspace_id, environment));
+    } else {
+      filtered = repeatableJobs.filter(job => job.name && job.name.includes(workspace_id));
+    }
+
+    return filtered.map(job => {
+      const delayed = delayedByName[job.name];
+      const data = delayed?.data || {};
+      const trigger = data.trigger || {};
+      return {
+        key: job.key,
+        name: job.name,
+        pattern: job.pattern,
+        next: job.next,
+        environment: data.environment || null,
+        trigger: {
+          url: trigger.url || null,
+          method: trigger.method || null,
+          headers: trigger.headers || null,
+          payload: trigger.payload || trigger.body || null,
+          cron: trigger.cron || job.pattern || null,
+        },
+      };
+    });
   }
 }
