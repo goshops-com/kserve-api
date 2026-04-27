@@ -61,6 +61,31 @@ router.get('/:workspace_id/triggers', async (req, res) => {
 });
 
 /**
+ * DELETE /api/workspaces/:workspace_id/triggers/by-key?key=...
+ * Remove a single scheduled job by its BullMQ key
+ */
+router.delete('/:workspace_id/triggers/by-key', async (req, res) => {
+  try {
+    const { workspace_id } = req.params;
+    const { key } = req.query;
+
+    if (!key) {
+      return res.status(400).json({ success: false, error: 'key query param required' });
+    }
+
+    if (!key.includes(workspace_id)) {
+      return res.status(403).json({ success: false, error: 'Job key does not belong to this workspace' });
+    }
+
+    const result = await workspaceService.removeJobByKey(key);
+    res.status(200).json({ success: true, workspace_id, ...result });
+  } catch (error) {
+    console.error('Error removing job by key:', error);
+    res.status(400).json({ success: false, error: error.message });
+  }
+});
+
+/**
  * DELETE /api/workspaces/:workspace_id/triggers
  *   - no query param  -> removes ALL jobs for the workspace (any env, including legacy)
  *   - ?environment=dev -> removes only that env (legacy jobs count as dev)

@@ -190,6 +190,23 @@ export class WorkspaceService {
   }
 
   /**
+   * Remove a single repeatable job by its BullMQ key
+   */
+  async removeJobByKey(jobKey) {
+    if (!jobKey) throw new Error('jobKey is required');
+
+    const repeatableJobs = await triggerQueue.getRepeatableJobs();
+    const job = repeatableJobs.find(j => j.key === jobKey);
+
+    if (!job) {
+      return { removed: false, message: 'Job not found' };
+    }
+
+    await triggerQueue.removeRepeatableByKey(jobKey);
+    return { removed: true, name: job.name };
+  }
+
+  /**
    * Get jobs for a workspace, optionally filtered by environment
    */
   async getWorkspaceJobs(workspace_id, environment = null) {

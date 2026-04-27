@@ -350,6 +350,66 @@
             font-size: 14px;
         }
 
+        /* Buttons */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            padding: 8px 16px;
+            border-radius: calc(var(--radius) - 2px);
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.15s;
+            border: 1px solid hsl(var(--border));
+            background-color: hsl(var(--secondary));
+            color: hsl(var(--secondary-foreground));
+            font-family: inherit;
+        }
+
+        .btn:hover { background-color: hsl(var(--accent)); }
+
+        .btn-destructive {
+            background-color: hsl(var(--destructive));
+            color: hsl(var(--destructive-foreground, 0 0% 98%));
+            border-color: hsl(var(--destructive));
+        }
+
+        .btn-destructive:hover {
+            background-color: hsl(var(--destructive) / 0.9);
+        }
+
+        .btn-sm { padding: 4px 10px; font-size: 12px; }
+
+        /* Danger zone */
+        .danger-zone {
+            background-color: hsl(var(--card));
+            border: 1px solid hsl(var(--destructive) / 0.3);
+            border-radius: var(--radius);
+            padding: 24px;
+            margin-bottom: 48px;
+        }
+
+        .danger-zone h3 {
+            color: hsl(var(--destructive));
+            font-size: 1rem;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .danger-zone p {
+            color: hsl(var(--muted-foreground));
+            font-size: 14px;
+            margin-bottom: 16px;
+        }
+
+        .danger-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
         /* Responsive */
         @media (max-width: 768px) {
             .hero h1 { font-size: 1.5rem; }
@@ -431,6 +491,27 @@
             </div>
 
             <div class="table-section">
+                <div class="table-header" style="display:flex; align-items:center; justify-content:space-between;">
+                    <h2 class="section-title">Active Schedules</h2>
+                    <span id="jobsCount" style="font-size:13px; color: hsl(var(--muted-foreground));"></span>
+                </div>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Job Name</th>
+                                <th>Environment</th>
+                                <th>Cron</th>
+                                <th>Next Run</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="jobsTableBody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="table-section">
                 <div class="table-header">
                     <h2 class="section-title">Recent Executions</h2>
                 </div>
@@ -449,6 +530,17 @@
                         </thead>
                         <tbody id="tableBody"></tbody>
                     </table>
+                </div>
+            </div>
+
+            <div class="danger-zone">
+                <h3>Danger Zone</h3>
+                <p id="dangerZoneText">Permanently delete scheduled jobs for this workspace. This cannot be undone.</p>
+                <div class="danger-actions">
+                    <button class="btn btn-destructive" onclick="deleteJobs('dev')">Delete dev jobs</button>
+                    <button class="btn btn-destructive" onclick="deleteJobs('stg')">Delete stg jobs</button>
+                    <button class="btn btn-destructive" onclick="deleteJobs('prod')">Delete prod jobs</button>
+                    <button class="btn btn-destructive" onclick="deleteJobs(null)">Delete ALL jobs</button>
                 </div>
             </div>
         </div>
@@ -534,18 +626,99 @@
             try {
                 const env = document.getElementById('envFilter').value;
                 const envParam = env ? `&environment=${env}` : '';
-                const response = await fetch(`/metrics/api/${workspaceId}?limit=100${envParam}`);
-                const data = await response.json();
+
+                const [metricsRes, jobsRes] = await Promise.all([
+                    fetch(`/metrics/api/${workspaceId}?limit=100${envParam}`),
+                    fetch(`/api/workspaces/${workspaceId}/triggers${env ? `?environment=${env}` : ''}`),
+                ]);
+
+                const data = await metricsRes.json();
+                const jobsData = await jobsRes.json();
 
                 document.getElementById('loading').style.display = 'none';
 
-                if (!response.ok) throw new Error(data.error || 'Failed to load metrics');
-                if (data.total === 0) { showError('No metrics found for this workspace'); return; }
+                if (!metricsRes.ok) throw new Error(data.error || 'Failed to load metrics');
+
+                renderJobs(jobsData.jobs || []);
+
+                if (data.total === 0) {
+                    document.getElementById('results').classList.add('show');
+                    showError('No execution metrics found for this workspace yet');
+                    return;
+                }
 
                 displayMetrics(data);
             } catch (error) {
                 document.getElementById('loading').style.display = 'none';
                 showError(error.message);
+            }
+        }
+
+        function renderJobs(jobs) {
+            const tbody = document.getElementById('jobsTableBody');
+            const countEl = document.getElementById('jobsCount');
+
+            tbody.innerHTML = '';
+            countEl.textContent = `${jobs.length} job${jobs.length !== 1 ? 's' : ''}`;
+
+            if (jobs.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; color: hsl(var(--muted-foreground)); padding: 32px;">No active scheduled jobs</td></tr>';
+                return;
+            }
+
+            jobs.forEach(job => {
+                const env = parseEnvFromJobName(job.name);
+                const nextRun = job.next ? new Date(job.next).toLocaleString() : '-';
+                const row = tbody.insertRow();
+                row.innerHTML = `
+                    <td class="mono">${escapeHtml(job.name)}</td>
+                    <td><span class="status-badge" style="background: hsl(var(--muted)); color: hsl(var(--foreground));">${env}</span></td>
+                    <td class="mono">${escapeHtml(job.pattern || job.cron || '-')}</td>
+                    <td class="mono">${nextRun}</td>
+                    <td><button class="btn btn-destructive btn-sm" onclick="deleteSingleJob('${job.key}')">Delete</button></td>
+                `;
+            });
+        }
+
+        function parseEnvFromJobName(name) {
+            // Format: {workspace_id}-{env}-trigger-{N} or legacy {workspace_id}-trigger-{N}
+            const match = name && name.match(/-(dev|stg|prod)-trigger-/);
+            return match ? match[1] : 'legacy';
+        }
+
+        function escapeHtml(s) {
+            return String(s).replace(/[&<>"']/g, c => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+            }[c]));
+        }
+
+        async function deleteJobs(environment) {
+            const label = environment ? `'${environment}' jobs` : 'ALL jobs';
+            if (!confirm(`Delete ${label} for this workspace? This cannot be undone.`)) return;
+
+            try {
+                const url = `/api/workspaces/${currentWorkspaceId}/triggers${environment ? `?environment=${environment}` : ''}`;
+                const res = await fetch(url, { method: 'DELETE' });
+                const data = await res.json();
+
+                if (!res.ok) throw new Error(data.error || 'Failed to delete');
+
+                alert(`Deleted ${data.removed} job(s)`);
+                loadMetrics(currentWorkspaceId);
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+
+        async function deleteSingleJob(jobKey) {
+            if (!confirm('Delete this scheduled job? This cannot be undone.')) return;
+            try {
+                const res = await fetch(`/api/workspaces/${currentWorkspaceId}/triggers/by-key?key=${encodeURIComponent(jobKey)}`, { method: 'DELETE' });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Failed to delete');
+                loadMetrics(currentWorkspaceId);
+            } catch (error) {
+                alert('Error: ' + error.message);
             }
         }
 
