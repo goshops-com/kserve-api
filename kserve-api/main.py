@@ -43,13 +43,16 @@ CLOUDFLARE_API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN")
 CLOUDFLARE_ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID", "920b1a6e159cf77dab28969103a4765b")
 
 
+MAX_IDLE_TIMEOUT = 3600  # Knative hardcoded max for scale-to-zero-pod-retention-period
+
+
 class DeploymentRequest(BaseModel):
     name: str
     image: str  # format: registry/path:tag
     envs: Optional[Dict[str, str]] = {}
     namespace: Optional[str] = DEFAULT_NAMESPACE
     custom_domain: Optional[str] = None  # Optional custom domain (e.g., "myapp.example.com")
-    idle_timeout: Optional[int] = None  # Seconds before scale-to-zero (None = Knative default ~60s)
+    idle_timeout: Optional[int] = None  # Seconds before scale-to-zero (1..3600, None = Knative default ~60s)
     size: Optional[str] = "sm"  # Machine size: sm, md, lg, xl
 
 
@@ -793,6 +796,21 @@ async def deploy_app(request: DeploymentRequest):
     try:
         namespace = request.namespace
         name = request.name
+
+        # Validate idle_timeout against Knative's hardcoded max
+        if request.idle_timeout is not None:
+            if request.idle_timeout < 1 or request.idle_timeout > MAX_IDLE_TIMEOUT:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"idle_timeout must be between 1 and {MAX_IDLE_TIMEOUT} seconds (Knative limit)"
+                )
+
+        # Validate size
+        if request.size and request.size not in MACHINE_SIZES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid size '{request.size}'. Valid: {', '.join(MACHINE_SIZES.keys())}"
+            )
 
         logger.info(f"Processing deployment request for {name} in namespace {namespace}")
 
