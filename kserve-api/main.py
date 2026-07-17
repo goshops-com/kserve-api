@@ -78,9 +78,10 @@ def create_knative_service_spec(name: str, image: str, envs: Dict[str, str], idl
     # Convert envs dict to list of env vars
     env_list = [{"name": k, "value": v} for k, v in envs.items()]
 
-    # Auto-inject service URL for self-ping keep-alive pattern
-    service_url = f"https://{name}.{DOMAIN}"
-    env_list.append({"name": "SERVICE_URL", "value": service_url})
+    # Auto-inject service URL for self-ping keep-alive pattern (only if not already provided)
+    if "SERVICE_URL" not in envs:
+        service_url = f"https://{name}.{DOMAIN}"
+        env_list.append({"name": "SERVICE_URL", "value": service_url})
 
     # Resolve machine size
     resources = MACHINE_SIZES.get(size, MACHINE_SIZES["sm"])
