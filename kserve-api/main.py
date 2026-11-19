@@ -1,7 +1,10 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import Dict, Optional
+from typing import Dict, List, Optional
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+import json
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 import logging
@@ -46,6 +49,76 @@ CLOUDFLARE_ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID", "920b1a6e159cf77dab28
 MAX_IDLE_TIMEOUT = 3600  # Knative hardcoded max for scale-to-zero-pod-retention-period
 
 
+# Always-on settings live as annotations on the Knative Service itself (metadata, not the
+# revision template, so changing them alone never creates a revision). The reconciler
+# (POST /always-on/reconcile, called every minute by the scheduler) reads them and flips
+# min-scale between 0 and 1.
+ALWAYS_ON_MODE_ANNOTATION = "calvincode.net/always-on-mode"          # "always" | "schedule"
+ALWAYS_ON_SCHEDULE_ANNOTATION = "calvincode.net/always-on-schedule"  # JSON of AlwaysOnSchedule
+MIN_SCALE_ANNOTATION = "autoscaling.knative.dev/min-scale"
+INFRA_SERVICES = ["kserve-api", "scheduler-api"]
+
+
+class AlwaysOnSchedule(BaseModel):
+    start: str  # "HH:MM" (24h), inclusive
+    end: str    # "HH:MM" (24h), exclusive. end < start means the window crosses midnight
+    timezone: str = "UTC"  # IANA name, e.g. "America/Montevideo"
+    days: Optional[List[int]] = None  # 0=Sunday .. 6=Saturday (day the window STARTS). None = every day
+
+
+def parse_hhmm(value: str) -> int:
+    """'HH:MM' -> minutes since midnight. Raises ValueError when malformed."""
+    parts = str(value).split(":")
+    if len(parts) != 2 or not all(p.isdigit() and len(p) <= 2 for p in parts):
+        raise ValueError(f"invalid time '{value}', expected HH:MM")
+    hours, minutes = int(parts[0]), int(parts[1])
+    if hours > 23 or minutes > 59:
+        raise ValueError(f"invalid time '{value}', expected HH:MM")
+    return hours * 60 + minutes
+
+
+def validate_schedule(schedule: AlwaysOnSchedule):
+    """Raises ValueError with a readable message when the schedule is not usable."""
+    start = parse_hhmm(schedule.start)
+    end = parse_hhmm(schedule.end)
+    if start == end:
+        raise ValueError("start and end must be different")
+    try:
+        ZoneInfo(schedule.timezone)
+    except Exception:
+        raise ValueError(f"unknown timezone '{schedule.timezone}'")
+    if schedule.days is not None:
+        if len(schedule.days) == 0 or any(d < 0 or d > 6 for d in schedule.days):
+            raise ValueError("days must be a non-empty list of 0..6 (0=Sunday)")
+
+
+def is_within_schedule(schedule: AlwaysOnSchedule, now_utc: datetime) -> bool:
+    """True when now falls inside the schedule's window, evaluated in its timezone."""
+    start = parse_hhmm(schedule.start)
+    end = parse_hhmm(schedule.end)
+    local = now_utc.astimezone(ZoneInfo(schedule.timezone))
+    minute = local.hour * 60 + local.minute
+    day = (local.weekday() + 1) % 7  # Python: Monday=0 -> ours: Sunday=0
+    days = set(schedule.days) if schedule.days is not None else set(range(7))
+
+    if start < end:
+        return day in days and start <= minute < end
+    # Window crosses midnight: it belongs to the day it started on
+    if minute >= start:
+        return day in days
+    if minute < end:
+        return ((day - 1) % 7) in days
+    return False
+
+
+def desired_min_scale(mode: Optional[str], schedule: Optional[AlwaysOnSchedule], now_utc: datetime) -> str:
+    if mode == "always":
+        return "1"
+    if mode == "schedule" and schedule is not None and is_within_schedule(schedule, now_utc):
+        return "1"
+    return "0"
+
+
 class DeploymentRequest(BaseModel):
     name: str
     image: str  # format: registry/path:tag
@@ -54,6 +127,8 @@ class DeploymentRequest(BaseModel):
     custom_domain: Optional[str] = None  # Optional custom domain (e.g., "myapp.example.com")
     idle_timeout: Optional[int] = None  # Seconds before scale-to-zero (1..3600, None = Knative default ~60s)
     size: Optional[str] = "sm"  # Machine size: sm, md, lg, xl
+    always_on: Optional[bool] = False  # Keep at least one instance running at all times (never scale to zero)
+    always_on_schedule: Optional[AlwaysOnSchedule] = None  # Keep one instance running only inside this window (ignored when always_on)
 
 
 MACHINE_SIZES = {
@@ -72,8 +147,19 @@ class DeploymentResponse(BaseModel):
     url: Optional[str] = None
 
 
-def create_knative_service_spec(name: str, image: str, envs: Dict[str, str], idle_timeout: int = None, size: str = "sm") -> dict:
+def create_knative_service_spec(name: str, image: str, envs: Dict[str, str], idle_timeout: int = None, size: str = "sm",
+                                always_on: bool = False, always_on_schedule: Optional[AlwaysOnSchedule] = None) -> dict:
     """Create Knative Service spec for customer app deployment"""
+
+    # Always-on mode. None values are kept on purpose: on update (merge patch) they
+    # remove a previously set annotation; on create they are stripped by the caller.
+    if always_on:
+        mode, schedule_json = "always", None
+    elif always_on_schedule is not None:
+        mode, schedule_json = "schedule", json.dumps(always_on_schedule.model_dump())
+    else:
+        mode, schedule_json = None, None
+    min_scale = desired_min_scale(mode, always_on_schedule, datetime.now(timezone.utc))
 
     # Convert envs dict to list of env vars
     env_list = [{"name": k, "value": v} for k, v in envs.items()]
@@ -94,13 +180,17 @@ def create_knative_service_spec(name: str, image: str, envs: Dict[str, str], idl
             "labels": {
                 "app": name,
                 "managed-by": "calvincode"
+            },
+            "annotations": {
+                ALWAYS_ON_MODE_ANNOTATION: mode,
+                ALWAYS_ON_SCHEDULE_ANNOTATION: schedule_json
             }
         },
         "spec": {
             "template": {
                 "metadata": {
                     "annotations": {
-                        "autoscaling.knative.dev/min-scale": "0",
+                        MIN_SCALE_ANNOTATION: min_scale,
                         "autoscaling.knative.dev/max-scale": "10",
                         "autoscaling.knative.dev/target": "250",
                         **({"autoscaling.knative.dev/scale-to-zero-pod-retention-period": f"{idle_timeout}s"} if idle_timeout is not None else {})
@@ -278,6 +368,7 @@ async def root():
             "web_analytics": "/web-analytics (GET)",
             "web_performance": "/web-performance (GET)",
             "deploy": "/deploy (POST)",
+            "always_on_reconcile": "/always-on/reconcile (POST)",
             "list": "/apps (GET)",
             "get": "/apps/{namespace}/{name} (GET)",
             "delete": "/apps/{namespace}/{name} (DELETE)",
@@ -813,6 +904,13 @@ async def deploy_app(request: DeploymentRequest):
                 detail=f"Invalid size '{request.size}'. Valid: {', '.join(MACHINE_SIZES.keys())}"
             )
 
+        # Validate always-on schedule
+        if request.always_on_schedule is not None and not request.always_on:
+            try:
+                validate_schedule(request.always_on_schedule)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=f"Invalid always_on_schedule: {e}")
+
         logger.info(f"Processing deployment request for {name} in namespace {namespace}")
 
         # Check if Knative Service exists
@@ -824,11 +922,15 @@ async def deploy_app(request: DeploymentRequest):
             image=request.image,
             envs=request.envs,
             idle_timeout=request.idle_timeout,
-            size=request.size
+            size=request.size,
+            always_on=bool(request.always_on),
+            always_on_schedule=request.always_on_schedule
         )
 
         if existing is None:
-            # Create new Knative Service
+            # Create new Knative Service (null annotations are only meaningful for patches)
+            metadata = knative_service["metadata"]
+            metadata["annotations"] = {k: v for k, v in metadata["annotations"].items() if v is not None}
             logger.info(f"Creating new Knative Service: {name}")
             result = custom_api.create_namespaced_custom_object(
                 group=KNATIVE_GROUP,
@@ -892,6 +994,72 @@ async def deploy_app(request: DeploymentRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/always-on/reconcile")
+def reconcile_always_on(namespace: str = DEFAULT_NAMESPACE):
+    """
+    Bring min-scale in line with each app's always-on settings.
+    Level-triggered and idempotent: the scheduler calls it every minute, and a missed
+    call is simply corrected by the next one. Only apps carrying the always-on
+    annotation are ever touched.
+    """
+    now = datetime.now(timezone.utc)
+    result = custom_api.list_namespaced_custom_object(
+        group=KNATIVE_GROUP,
+        version=KNATIVE_VERSION,
+        namespace=namespace,
+        plural=KNATIVE_SERVICE_PLURAL
+    )
+
+    managed = 0
+    changed = []
+    errors = []
+
+    for item in result.get("items", []):
+        name = item["metadata"]["name"]
+        if name in INFRA_SERVICES:
+            continue
+
+        annotations = item["metadata"].get("annotations") or {}
+        mode = annotations.get(ALWAYS_ON_MODE_ANNOTATION)
+        if mode not in ("always", "schedule"):
+            continue
+        managed += 1
+
+        try:
+            schedule = None
+            if mode == "schedule":
+                schedule = AlwaysOnSchedule(**json.loads(annotations.get(ALWAYS_ON_SCHEDULE_ANNOTATION) or "{}"))
+                validate_schedule(schedule)
+
+            desired = desired_min_scale(mode, schedule, now)
+            template_annotations = item.get("spec", {}).get("template", {}).get("metadata", {}).get("annotations") or {}
+            current = template_annotations.get(MIN_SCALE_ANNOTATION, "0")
+            if current == desired:
+                continue
+
+            logger.info(f"Always-on reconcile: {name} min-scale {current} -> {desired} (mode={mode})")
+            custom_api.patch_namespaced_custom_object(
+                group=KNATIVE_GROUP,
+                version=KNATIVE_VERSION,
+                namespace=namespace,
+                plural=KNATIVE_SERVICE_PLURAL,
+                name=name,
+                body={"spec": {"template": {"metadata": {"annotations": {MIN_SCALE_ANNOTATION: desired}}}}}
+            )
+            changed.append({"name": name, "from": current, "to": desired})
+        except Exception as e:
+            logger.error(f"Always-on reconcile failed for {name}: {str(e)}")
+            errors.append({"name": name, "error": str(e)})
+
+    return {
+        "status": "success" if not errors else "partial",
+        "checked_at": now.isoformat(),
+        "managed": managed,
+        "changed": changed,
+        "errors": errors
+    }
+
+
 @app.get("/apps")
 async def list_apps(namespace: str = DEFAULT_NAMESPACE):
     """List all Knative Services (apps) in a namespace"""
@@ -908,7 +1076,7 @@ async def list_apps(namespace: str = DEFAULT_NAMESPACE):
             name = item["metadata"]["name"]
 
             # Skip infrastructure services
-            if name in ["kserve-api", "scheduler-api"]:
+            if name in INFRA_SERVICES:
                 continue
 
             # Check if service is ready
@@ -941,11 +1109,18 @@ async def get_app(namespace: str, name: str):
         containers = result.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
         image = containers[0].get("image", "unknown") if containers else "unknown"
 
+        annotations = result["metadata"].get("annotations") or {}
+        template_annotations = result.get("spec", {}).get("template", {}).get("metadata", {}).get("annotations") or {}
+        schedule_raw = annotations.get(ALWAYS_ON_SCHEDULE_ANNOTATION)
+
         return {
             "name": result["metadata"]["name"],
             "namespace": result["metadata"]["namespace"],
             "image": image,
             "url": f"https://{name}.{DOMAIN}",
+            "always_on_mode": annotations.get(ALWAYS_ON_MODE_ANNOTATION),
+            "always_on_schedule": json.loads(schedule_raw) if schedule_raw else None,
+            "min_scale": template_annotations.get(MIN_SCALE_ANNOTATION),
             "conditions": result.get("status", {}).get("conditions", [])
         }
 

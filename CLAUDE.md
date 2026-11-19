@@ -56,6 +56,21 @@ kubectl patch ksvc {name} -n default --type='json' \
 | lg | 1 | 2 GB |
 | xl | 2 | 4 GB |
 
+## Always-on (min-scale)
+
+`POST /deploy` accepts two optional fields; with neither, the app scales to zero as before.
+
+| Field | Effect |
+|-------|--------|
+| `always_on: true` | `min-scale: 1` permanently |
+| `always_on_schedule: {start, end, timezone, days?}` | `min-scale: 1` only inside the window (`HH:MM`, IANA timezone, `days` 0=Sunday..6, `end < start` crosses midnight) |
+
+- The setting is stored on the Knative Service as `calvincode.net/always-on-mode` / `calvincode.net/always-on-schedule` annotations.
+- Knative has no native schedule, so `POST /always-on/reconcile` sets `min-scale` to what it should be right now. It is idempotent and only touches apps carrying the annotation.
+- The scheduler calls it every minute: a trigger registered under workspace `calvin-always-on` (env `prod`) in scheduler-api. If schedules stop being applied, check that trigger still exists:
+  `curl https://scheduler-api.calvinruntime.net/api/workspaces/calvin-always-on/triggers`
+- Changing `min-scale` creates a new revision, so the pod is replaced when a window opens and closes.
+
 ## Important Notes
 
 - Never commit files with secrets (.doctl_token, .git-credentials, docker-login.sh)
